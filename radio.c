@@ -38,17 +38,10 @@ esp_err_t espradio_wifi_init(void) {
     cfg.nvs_enable = 0;
 
     esp_err_t ret = esp_wifi_init_internal(&cfg);
-    if (ret != 0 && (ret < 0x3FC00000 || ret > 0x40400000)) {
-        return ret;
-    }
 
-    /* wifi_init_completed() is called from Go after a delay, when the worker has already processed cmd 15 */
     return ret;
 }
 
-void espradio_wifi_init_completed(void) {
-    wifi_init_completed();
-}
 
 /* Minimal symbol expected by blobs (wifi_event_post in libnet80211.a).
  * In IDF this is ESP_EVENT_DECLARE_BASE(WIFI_EVENT), i.e. extern esp_event_base_t const WIFI_EVENT;

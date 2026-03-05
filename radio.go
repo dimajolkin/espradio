@@ -97,31 +97,10 @@ func Enable(config Config) error {
 	// In practice the blob sometimes returns a DRAM address (e.g. 0x3FC83136); we treat that as success (isPointerLike).
 	errCode = C.espradio_wifi_init()
 	if errCode != 0 {
-		if isPointerLike(errCode) {
-			// see comment above
-		} else {
-			return makeError(errCode)
-		}
+		return makeError(errCode)
 	}
 
-	// Воркер обрабатывает cmd 6, cmd 15 асинхронно. Вызываем wifi_init_completed() после паузы,
-	// чтобы драйвер выставил флаг "inited" (иначе esp_wifi_set_mode даёт NOT_INIT).
-	time.Sleep(400 * time.Millisecond)
-	C.espradio_wifi_init_completed()
-	time.Sleep(100 * time.Millisecond)
-	if config.Logging >= LogLevelDebug {
-		_ = C.esp_wifi_internal_set_log_mod(0, 0, true) // WIFI_LOG_MODULE_ALL, WIFI_LOG_SUBMODULE_ALL, enable
-	}
-	const initWaitMs = 2000
-	deadline := time.Now().Add(initWaitMs * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if code := C.esp_wifi_set_mode(C.WIFI_MODE_STA); code == C.ESP_OK {
-			C.esp_wifi_set_mode(C.WIFI_MODE_NULL)
-			return nil
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return makeError(C.esp_err_t(0x3001)) // ESP_ERR_WIFI_NOT_INIT
+	return nil
 }
 
 func millisecondsToTicks(ms uint32) uint32 {
@@ -147,10 +126,8 @@ func espradio_run_task(task_func, param unsafe.Pointer)
 
 //export espradio_task_create_pinned_to_core
 func espradio_task_create_pinned_to_core(task_func unsafe.Pointer, name *C.char, stack_depth uint32, param unsafe.Pointer, prio uint32, task_handle *unsafe.Pointer, core_id uint32) int32 {
-	println("espradio: driver task create pinned to core", task_func, name, stack_depth, param, prio, task_handle, core_id)
 	ch := make(chan struct{}, 1)
 	go func() {
-		println("espradio: driver task goroutine started")
 		*task_handle = tinygo_task_current()
 		close(ch)
 		espradio_run_task(task_func, unsafe.Pointer(task_handle))
