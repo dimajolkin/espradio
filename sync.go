@@ -14,7 +14,6 @@ import "C"
 
 import (
 	"fmt"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -119,26 +118,10 @@ func espradio_semphr_create(max, init uint32) unsafe.Pointer {
 func espradio_semphr_take(semphr unsafe.Pointer, block_time_tick uint32) int32 {
 	sem := (*semaphore)(semphr)
 	println("espradio_semphr_take", block_time_tick, "sem", semphr)
-	if block_time_tick == 0 {
-		select {
-		case <-*sem:
-			return 1
-		default:
-			return 0
-		}
-	}
-	if block_time_tick == C.OSI_FUNCS_TIME_BLOCKING {
-		<-*sem
-		return 1
-	}
-	d := time.Duration(ticksToMilliseconds(block_time_tick)) * time.Millisecond
-	timer := time.NewTimer(d)
-	defer timer.Stop()
+
 	select {
 	case <-*sem:
 		return 1
-	case <-timer.C:
-		return 0
 	}
 }
 
@@ -207,7 +190,7 @@ func espradio_queue_recv(ptr unsafe.Pointer, item unsafe.Pointer, block_time_tic
 	if block_time_tick != C.OSI_FUNCS_TIME_BLOCKING {
 		panic("espradio: todo: queue_recv with timeout")
 	}
-	runtime.Gosched()
+
 	cmd := <-*q
 	println("espradio_queue_recv got cmd", wifiCmdString(cmd[0]),
 		"params:", cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7])
