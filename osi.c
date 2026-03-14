@@ -162,12 +162,15 @@ int32_t espradio_mutex_lock(void *mutex);
 
 int32_t espradio_mutex_unlock(void *mutex);
 
+void *espradio_generic_queue_create(uint32_t queue_len, uint32_t item_size);
+void  espradio_generic_queue_delete(void *queue);
+
 static void *espradio_queue_create(uint32_t queue_len, uint32_t item_size) {
-    espradio_panic("todo: _queue_create");
+    return espradio_generic_queue_create(queue_len, item_size);
 }
 
 static void espradio_queue_delete(void *queue) {
-    espradio_panic("todo: _queue_delete");
+    espradio_generic_queue_delete(queue);
 }
 
 int32_t espradio_queue_send(void *queue, void *item, uint32_t block_time_tick);
@@ -409,16 +412,19 @@ void espradio_event_loop_run_once(void) {
     espradio_arena_free(e);
 }
 
-static void espradio_dummy_event_cb(void *arg, esp_event_base_t base, int32_t id, void *data) {
+extern void espradio_on_wifi_event(int32_t event_id, void *data);
+
+static void espradio_wifi_event_cb(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
 #if ESPRADIO_OSI_DEBUG
     printf("osi: event_cb base=%s id=%ld data=%p\n", base ? base : "(null)", (long)id, data);
 #endif
+    espradio_on_wifi_event(id, data);
 }
 
 void espradio_event_register_default_cb(void) {
     if (esp_event_loop_create_default() != 0) return;
-    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, espradio_dummy_event_cb, NULL);
+    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, espradio_wifi_event_cb, NULL);
 }
 
 /**************************************************************************

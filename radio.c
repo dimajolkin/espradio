@@ -25,7 +25,7 @@ extern void ets_isr_unmask(uint32_t mask);
  *   3. esp_wifi_bt_power_domain_on()      — power domain
  *   4. esp_wifi_init_internal(config)     — see below
  *   5. esp_phy_modem_init()               — not in blobs
- *   6. esp_supplicant_init()              — not called (WPA)
+ *   6. esp_supplicant_init()              — called (WPA2-PSK)
  *   7. wifi_init_completed()
  *
  * esp_wifi_init_internal (implemented in libnet80211.a, no sources):
@@ -154,8 +154,9 @@ esp_err_t espradio_wifi_init(void) {
         extern void esp_phy_modem_init(void);
         esp_phy_modem_init();
 
-        extern void espradio_wpa_register(void);
-        espradio_wpa_register();
+        extern esp_err_t esp_supplicant_init(void);
+        esp_err_t sup_rc = esp_supplicant_init();
+        printf("espradio: esp_supplicant_init -> %d\n", (int)sup_rc);
     }
     return ret;
 }

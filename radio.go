@@ -87,10 +87,11 @@ type Config struct {
 
 const schedTickerMs = 5
 
-var eventLoopKick = make(chan struct{}, 1)
+var eventLoopKick chan struct{}
 var taskDelayLogCounter atomic.Uint32
 
 func startSchedTicker() {
+	eventLoopKick = make(chan struct{}, 1)
 	go func() {
 		ticker := time.NewTicker(schedTickerMs * time.Millisecond)
 		defer ticker.Stop()
@@ -101,10 +102,10 @@ func startSchedTicker() {
 			case <-eventLoopKick:
 				// println("osi: event_loop kick recv")
 			}
-		drainISRQueue()
-		for i := 0; i < 4; i++ {
-			C.espradio_event_loop_run_once()
-		}
+			drainISRQueue()
+			for i := 0; i < 4; i++ {
+				C.espradio_event_loop_run_once()
+			}
 			for i := 0; i < 4; i++ {
 				// println("osi: timer_poll_due call", i)
 				fired := C.espradio_timer_poll_due(8)
@@ -124,6 +125,9 @@ func startSchedTicker() {
 
 //export espradio_event_loop_kick_go
 func espradio_event_loop_kick_go() {
+	if eventLoopKick == nil {
+		return
+	}
 	println("osi: event_loop kick send")
 	select {
 	case eventLoopKick <- struct{}{}:
@@ -252,13 +256,16 @@ func espradio_time_us_now() uint64 {
 
 var (
 	timerGenMu sync.Mutex
-	timerGen   = map[uintptr]uint32{}
+	timerGen   map[uintptr]uint32
 )
 
 func timerArmGeneration(timer unsafe.Pointer) uint32 {
 	key := uintptr(timer)
 	timerGenMu.Lock()
 	defer timerGenMu.Unlock()
+	if timerGen == nil {
+		timerGen = make(map[uintptr]uint32)
+	}
 	g := timerGen[key] + 1
 	timerGen[key] = g
 	return g
@@ -268,6 +275,9 @@ func timerGenerationAlive(timer unsafe.Pointer, gen uint32) bool {
 	key := uintptr(timer)
 	timerGenMu.Lock()
 	defer timerGenMu.Unlock()
+	if timerGen == nil {
+		return false
+	}
 	return timerGen[key] == gen
 }
 
@@ -275,6 +285,9 @@ func timerGenerationAlive(timer unsafe.Pointer, gen uint32) bool {
 func espradio_timer_cancel_go(timer unsafe.Pointer) {
 	key := uintptr(timer)
 	timerGenMu.Lock()
+	if timerGen == nil {
+		timerGen = make(map[uintptr]uint32)
+	}
 	timerGen[key] = timerGen[key] + 1
 	gen := timerGen[key]
 	timerGenMu.Unlock()

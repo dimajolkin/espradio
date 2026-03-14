@@ -408,6 +408,35 @@ func kickTimerWorker() {
 	// Timers are polled from the single scheduler goroutine in startSchedTicker.
 }
 
+//export espradio_generic_queue_create
+func espradio_generic_queue_create(queue_len, item_size int) unsafe.Pointer {
+	if item_size != 8 {
+		println("espradio: queue_create item_size=", item_size, "forcing 8")
+		item_size = 8
+	}
+	if queue_len < 1 {
+		queue_len = 1
+	}
+	q := newQueue(queue_len)
+	handle := unsafe.Pointer(q)
+	ptr := unsafe.Pointer(&handle)
+	registerQueue(handle, ptr, q)
+	if debugOSI {
+		println("espradio_generic_queue_create len=", queue_len, "size=", item_size, "ptr=", ptr)
+	}
+	return ptr
+}
+
+//export espradio_generic_queue_delete
+func espradio_generic_queue_delete(ptr unsafe.Pointer) {
+	if debugOSI {
+		println("espradio_generic_queue_delete", ptr)
+	}
+	if ptr != nil {
+		unregisterQueue(ptr, nil)
+	}
+}
+
 //export espradio_wifi_create_queue
 func espradio_wifi_create_queue(queue_len, item_size int) unsafe.Pointer {
 	if item_size != 8 {
