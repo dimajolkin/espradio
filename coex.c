@@ -7,7 +7,7 @@
 #include <stdio.h>
 
 #ifndef ESPRADIO_OSI_DEBUG
-#define ESPRADIO_OSI_DEBUG 1
+#define ESPRADIO_OSI_DEBUG 0
 #endif
 
 extern unsigned long espradio_stack_remaining(void);

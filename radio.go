@@ -102,7 +102,15 @@ func startSchedTicker() {
 			case <-eventLoopKick:
 				// println("osi: event_loop kick recv")
 			}
-			drainISRQueue()
+
+		for C.espradio_isr_ring_tail() != C.espradio_isr_ring_head() {
+			idx := C.espradio_isr_ring_tail()
+				q := C.espradio_isr_ring_entry_queue(idx)
+				item := C.espradio_isr_ring_entry_item(idx)
+				C.espradio_queue_send(q, item, 0)
+				C.espradio_isr_ring_advance_tail()
+			}
+
 			for i := 0; i < 4; i++ {
 				C.espradio_event_loop_run_once()
 			}
@@ -128,7 +136,6 @@ func espradio_event_loop_kick_go() {
 	if eventLoopKick == nil {
 		return
 	}
-	println("osi: event_loop kick send")
 	select {
 	case eventLoopKick <- struct{}{}:
 	default:
@@ -394,15 +401,4 @@ func initWiFiISR() {
 func enableWiFiISR() {
 	wifiISR.Enable()
 	println("isr: WiFi interrupt 1 enabled")
-}
-
-func drainISRQueue() {
-	for C.espradio_isr_ring_tail() != C.espradio_isr_ring_head() {
-		println("osi: drainISRQueue")
-		idx := C.espradio_isr_ring_tail()
-		q := C.espradio_isr_ring_entry_queue(idx)
-		item := C.espradio_isr_ring_entry_item(idx)
-		C.espradio_queue_send(q, item, 0)
-		C.espradio_isr_ring_advance_tail()
-	}
 }

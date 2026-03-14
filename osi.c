@@ -7,7 +7,7 @@
 
 /* Set to 1 to enable OSI callback logs (e.g. CGO_CFLAGS=-DESPRADIO_OSI_DEBUG=1). */
 #ifndef ESPRADIO_OSI_DEBUG
-#define ESPRADIO_OSI_DEBUG 1
+#define ESPRADIO_OSI_DEBUG 0
 #endif
 
 #include <stdint.h>
@@ -416,9 +416,7 @@ extern void espradio_on_wifi_event(int32_t event_id, void *data);
 
 static void espradio_wifi_event_cb(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
-#if ESPRADIO_OSI_DEBUG
-    printf("osi: event_cb base=%s id=%ld data=%p\n", base ? base : "(null)", (long)id, data);
-#endif
+    printf("WIFI_EVENT_CB: id=%ld data=%p\n", (long)id, data);
     espradio_on_wifi_event(id, data);
 }
 
@@ -434,6 +432,8 @@ void espradio_event_register_default_cb(void) {
  *************************************************************************/
 int32_t espradio_event_post(const char* event_base, int32_t event_id, void* event_data, size_t event_data_size, uint32_t ticks_to_wait) {
     (void)ticks_to_wait;
+    printf("EVENT_POST: base=%s id=%ld size=%zu\n",
+           event_base ? event_base : "(null)", (long)event_id, (size_t)event_data_size);
 #if ESPRADIO_OSI_DEBUG
     printf("CCHK: event_post called\n");
     fflush(stdout);

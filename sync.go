@@ -20,7 +20,7 @@ import (
 
 // debugOSI enables println in OSI callbacks (queue, mutex, semaphore, event_group).
 // Set to true for tracing; may increase stack usage in WiFi task.
-const debugOSI = true
+const debugOSI = false
 
 // Various functions related to locks, mutexes, semaphores, and queues.
 //
@@ -543,7 +543,9 @@ func espradio_queue_recv(ptr unsafe.Pointer, item unsafe.Pointer, block_time_tic
 	}
 
 got:
-	println("osi: queue_recv got cmd=", cmd[0])
+	if debugOSI {
+		println("osi: queue_recv got cmd=", cmd[0])
+	}
 	debugDumpCmd6("queue_recv", cmd)
 	debugDumpCmd0("queue_recv", cmd)
 	if debugOSI && cmd[0] == 7 {
@@ -563,6 +565,7 @@ got:
 	if debugOSI {
 		println("osi: queue_recv qlen_after=", q.length())
 	}
+	runtime.Gosched()
 	return 1
 }
 

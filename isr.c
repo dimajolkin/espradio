@@ -6,7 +6,7 @@
 extern void intr_matrix_set(uint32_t cpu_no, uint32_t model_num, uint32_t intr_num);
 
 #ifndef ESPRADIO_OSI_DEBUG
-#define ESPRADIO_OSI_DEBUG 1
+#define ESPRADIO_OSI_DEBUG 0
 #endif
 
 /* ---- ISR fn/arg storage ---- */
@@ -31,13 +31,17 @@ static volatile uint32_t s_in_isr = 0;
 void espradio_call_saved_isr(int32_t n) {
     s_in_isr = 1;
     __asm__ volatile ("fence" ::: "memory");
+#if ESPRADIO_OSI_DEBUG    
     printf("ISR: n=%ld fn=%p arg=%p\n", (long)n,
            (n >= 0 && n < 32) ? (void *)s_isr_fn[n] : NULL,
            (n >= 0 && n < 32) ? s_isr_arg[n] : NULL);
+#endif
     if (n >= 0 && n < 32 && s_isr_fn[n]) {
         s_isr_fn[n](s_isr_arg[n]);
     }
+#if ESPRADIO_OSI_DEBUG     
     printf("ISR: done n=%ld\n", (long)n);
+#endif
     __asm__ volatile ("fence" ::: "memory");
     s_in_isr = 0;
 }
