@@ -38,8 +38,9 @@ esp_err_t espradio_sta_set_config(const char *ssid, int ssid_len,
 esp_err_t espradio_sniff_begin(uint8_t channel);
 esp_err_t espradio_sniff_end(void);
 uint32_t espradio_sniff_count(void);
-int espradio_start_ap_impl(const char *ssid, size_t ssid_len,
-    const char *password, size_t pwd_len, uint8_t channel, int auth_open);
+esp_err_t espradio_ap_set_config(const char *ssid, int ssid_len,
+                                 const char *pwd, int pwd_len,
+                                 uint8_t channel, int auth_open);
 extern esp_err_t esp_wifi_connect_internal(void);
 
 /* ===== netif (netif.c) ===== */

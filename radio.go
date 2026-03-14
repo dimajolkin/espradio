@@ -310,20 +310,25 @@ func espradio_on_wifi_event(eventID int32, data unsafe.Pointer) {
 
 // StartAP starts the radio in soft-AP mode with the given configuration.
 func StartAP(cfg APConfig) error {
+	if code := C.esp_wifi_set_mode(C.WIFI_MODE_AP); code != C.ESP_OK {
+		return makeError(code)
+	}
+
 	ssid := cfg.SSID
-	pwd := cfg.Password
 	if len(ssid) == 0 {
 		ssid = "espradio-ap"
 	}
-	ssidC := C.CString(ssid)
-	defer C.free(unsafe.Pointer(ssidC))
-	pwdC := C.CString(pwd)
-	defer C.free(unsafe.Pointer(pwdC))
-	code := C.espradio_start_ap_impl(ssidC, C.size_t(len(ssid)),
-		pwdC, C.size_t(len(pwd)),
-		C.uint8_t(cfg.Channel), C.int(boolToInt(cfg.AuthOpen)))
-	if code != 0 {
-		return makeError(C.esp_err_t(code))
+	code := C.espradio_ap_set_config(
+		C.CString(ssid), C.int(len(ssid)),
+		C.CString(cfg.Password), C.int(len(cfg.Password)),
+		C.uint8_t(cfg.Channel), C.int(boolToInt(cfg.AuthOpen)),
+	)
+	if code != C.ESP_OK {
+		return makeError(code)
+	}
+
+	if code := C.espradio_esp_wifi_start(); code != C.ESP_OK {
+		return makeError(code)
 	}
 	return nil
 }

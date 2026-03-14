@@ -240,6 +240,22 @@ esp_err_t espradio_sta_set_config(const char *ssid, int ssid_len,
     return esp_wifi_set_config(WIFI_IF_STA, &cfg);
 }
 
+esp_err_t espradio_ap_set_config(const char *ssid, int ssid_len,
+                                 const char *pwd, int pwd_len,
+                                 uint8_t channel, int auth_open) {
+    wifi_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    if (ssid_len > 32) ssid_len = 32;
+    memcpy(cfg.ap.ssid, ssid, ssid_len);
+    cfg.ap.ssid_len = (uint8_t)ssid_len;
+    if (pwd_len > 64) pwd_len = 64;
+    memcpy(cfg.ap.password, pwd, pwd_len);
+    cfg.ap.channel = channel ? channel : 1;
+    cfg.ap.max_connection = 4;
+    cfg.ap.authmode = (auth_open || pwd_len == 0) ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+    return esp_wifi_set_config(WIFI_IF_AP, &cfg);
+}
+
 static volatile uint32_t espradio_sniff_packets = 0;
 
 static void espradio_promisc_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
