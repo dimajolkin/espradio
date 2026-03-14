@@ -38,18 +38,28 @@ fi
 IDF_WIFI_LIB="${IDF_PATH}/components/esp_wifi/lib/esp32c3"
 IDF_PHY_LIB="${IDF_PATH}/components/esp_phy/lib/esp32c3"
 
-# Prebuilt WiFi/PHY libs are from Espressif. TinyGo's esp32c3.ld uses IDF layout (0x4E710)
+# Prebuilt WiFi/PHY libs are from Espressif (esp32c3). TinyGo's esp32c3.ld uses IDF layout (0x4E710)
 # so memprot and WiFi blobs see the same DRAM/IRAM boundaries.
+
+if [ ! -d "${IDF_WIFI_LIB}" ]; then
+  echo "Error: IDF esp_wifi prebuilts for esp32c3 not found: ${IDF_WIFI_LIB}" >&2
+  echo "Check IDF_PATH and that target esp32c3 is supported." >&2
+  exit 1
+fi
+if [ ! -d "${IDF_PHY_LIB}" ]; then
+  echo "Error: IDF esp_phy prebuilts for esp32c3 not found: ${IDF_PHY_LIB}" >&2
+  exit 1
+fi
 
 mkdir -p "${BLOBS_LIB}"
 rm -f "${BLOBS_LIB}"/*.a
 
-echo "Copying prebuilt from IDF esp_wifi..."
+echo "Copying prebuilt from IDF esp_wifi (esp32c3)..."
 for f in "${IDF_WIFI_LIB}"/lib*.a; do
   [ -f "$f" ] && cp "$f" "${BLOBS_LIB}/"
 done
 
-echo "Copying prebuilt from IDF esp_phy..."
+echo "Copying prebuilt from IDF esp_phy (esp32c3)..."
 for f in "${IDF_PHY_LIB}"/lib*.a; do
   [ -f "$f" ] && cp "$f" "${BLOBS_LIB}/"
 done

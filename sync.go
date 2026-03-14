@@ -1,24 +1,33 @@
 package espradio
 
+/*
+#include "include.h"
+unsigned long espradio_stack_remaining(void);
+int espradio_fire_one_pending_timer(void);
+void espradio_ensure_osi_ptr(void);
+*/
+import "C"
+
+import (
+	"encoding/binary"
+	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unsafe"
+)
+
+// debugOSI enables println in OSI callbacks (queue, mutex, semaphore, event_group).
+// Set to true for tracing; may increase stack usage in WiFi task.
+const debugOSI = true
+
 // Various functions related to locks, mutexes, semaphores, and queues.
 //
 // WiFi task queue: driver messages in the queue are 8 bytes [cmd, p1..p7].
 // cmd is the internal API command type (not documented in public IDF headers).
 // Observed during init: 6 (right after wifi task start), 15 (right after semaphore creation).
 // Implementation lives in binary blobs; we only log cmd and do not block waiting for a reply.
-
-/*
-#include "include.h"
-*/
-import "C"
-
-import (
-	"fmt"
-	"sync"
-	"sync/atomic"
-	"time"
-	"unsafe"
-)
 
 func wifiCmdString(cmd byte) string {
 	switch cmd {
@@ -36,20 +45,34 @@ var fakeSpinLock uint8
 
 //export espradio_spin_lock_create
 func espradio_spin_lock_create() unsafe.Pointer {
+	if debugOSI {
+		println("osi: spin_lock_create")
+	}
 	return unsafe.Pointer(&fakeSpinLock)
 }
 
 //export espradio_spin_lock_delete
 func espradio_spin_lock_delete(lock unsafe.Pointer) {
+	if debugOSI {
+		println("osi: spin_lock_delete")
+	}
 }
 
-// Use a small pool of mutexes. The blobs don't need that many, and we can
-// reuse freed ones.
-var mutexes [8]sync.Mutex
+// Use a small pool of recursive mutexes.
+type recursiveMutex struct {
+	state sync.Mutex
+	owner unsafe.Pointer
+	count uint32
+}
+
+var mutexes [8]recursiveMutex
 var mutexInUse [8]uint32
 
 //export espradio_recursive_mutex_create
 func espradio_recursive_mutex_create() unsafe.Pointer {
+	if debugOSI {
+		println("osi: recursive_mutex_create")
+	}
 	for i := range mutexes {
 		if atomic.CompareAndSwapUint32(&mutexInUse[i], 0, 1) {
 			return unsafe.Pointer(&mutexes[i])
@@ -60,7 +83,14 @@ func espradio_recursive_mutex_create() unsafe.Pointer {
 
 //export espradio_mutex_delete
 func espradio_mutex_delete(cmut unsafe.Pointer) {
-	mut := (*sync.Mutex)(cmut)
+	if debugOSI {
+		println("osi: mutex_delete")
+	}
+	mut := (*recursiveMutex)(cmut)
+	mut.state.Lock()
+	mut.owner = nil
+	mut.count = 0
+	mut.state.Unlock()
 	for i := range mutexes {
 		if mut == &mutexes[i] {
 			atomic.StoreUint32(&mutexInUse[i], 0)
@@ -71,91 +101,311 @@ func espradio_mutex_delete(cmut unsafe.Pointer) {
 
 //export espradio_mutex_lock
 func espradio_mutex_lock(cmut unsafe.Pointer) int32 {
-	// This is xSemaphoreTake with an infinite timeout in ESP-IDF. Therefore,
-	// just lock the mutex and return true.
-	// TODO: recursive locking. See:
-	// https://www.freertos.org/RTOS-Recursive-Mutexes.html
-	// For that we need to track the current goroutine - or maybe just whether
-	// we're inside a special goroutine like the timer goroutine.
-	mut := (*sync.Mutex)(cmut)
-	mut.Lock()
-	return 1
+	if debugOSI {
+		println("osi: mutex_lock", cmut)
+	}
+	mut := (*recursiveMutex)(cmut)
+	me := tinygo_task_current()
+	waitSpins := uint32(0)
+	for {
+		mut.state.Lock()
+		if mut.count == 0 || mut.owner == me {
+			mut.owner = me
+			mut.count++
+			mut.state.Unlock()
+			return 1
+		}
+		waitSpins++
+		if debugOSI && (waitSpins&0x0f) == 0 {
+			println("osi: mutex_lock waiting", cmut, "owner=", mut.owner, "me=", me, "count=", mut.count, "spins=", waitSpins)
+		}
+		mut.state.Unlock()
+		runtime.Gosched()
+	}
 }
 
 //export espradio_mutex_unlock
 func espradio_mutex_unlock(cmut unsafe.Pointer) int32 {
-	// Note: this is xSemaphoreGive in the ESP-IDF, which doesn't panic when
-	// unlocking fails but rather returns false.
-	mut := (*sync.Mutex)(cmut)
-	mut.Unlock()
-	return 1
+	if debugOSI {
+		println("osi: mutex_unlock", cmut)
+	}
+	mut := (*recursiveMutex)(cmut)
+	me := tinygo_task_current()
+	mut.state.Lock()
+	if mut.count > 0 && mut.owner == me {
+		mut.count--
+		if mut.count == 0 {
+			mut.owner = nil
+		}
+		mut.state.Unlock()
+		return 1
+	}
+	mut.state.Unlock()
+	return 0
 }
 
-type semaphore chan struct{}
+type semaphore struct {
+	count uint32
+}
 
-var semaphores [2]semaphore
+var semaphores [4]semaphore
 var semaphoreIndex uint32
 
-var wifiSemaphore semaphore
+var (
+	wifiThreadSemMu   sync.Mutex
+	wifiThreadSemByTH = map[unsafe.Pointer]*semaphore{}
+	wifiThreadSemNil  semaphore
+)
+
+func wifiThreadSemOwner(semphr unsafe.Pointer) unsafe.Pointer {
+	wifiThreadSemMu.Lock()
+	defer wifiThreadSemMu.Unlock()
+	for th, sem := range wifiThreadSemByTH {
+		if unsafe.Pointer(sem) == semphr {
+			return th
+		}
+	}
+	return nil
+}
+
+func debugDumpCmd6(where string, cmd [8]byte) {
+	if !debugOSI || cmd[0] != 6 {
+		return
+	}
+	p := binary.LittleEndian.Uint32(cmd[4:8])
+	println("osi:", where, "cmd6 ptr=", p)
+	if p < 0x3fc00000 || p >= 0x40000000 {
+		println("osi:", where, "cmd6 ptr out of DRAM range")
+		return
+	}
+	base := uintptr(p)
+	w0 := *(*uint32)(unsafe.Pointer(base + 0))
+	w1 := *(*uint32)(unsafe.Pointer(base + 4))
+	w2 := *(*uint32)(unsafe.Pointer(base + 8))
+	w3 := *(*uint32)(unsafe.Pointer(base + 12))
+	w4 := *(*uint32)(unsafe.Pointer(base + 16))
+	w5 := *(*uint32)(unsafe.Pointer(base + 20))
+	println("osi:", where, "cmd6 words=", w0, w1, w2, w3, w4, w5)
+}
+
+func debugDumpCmd0(where string, cmd [8]byte) {
+	if !debugOSI || cmd[0] != 0 {
+		return
+	}
+	println("osi:", where, "cmd0 bytes=", cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7])
+	p := binary.LittleEndian.Uint32(cmd[4:8])
+	println("osi:", where, "cmd0 ptr=", p)
+	if p < 0x3fc00000 || p >= 0x40000000 {
+		return
+	}
+	base := uintptr(p)
+	w0 := *(*uint32)(unsafe.Pointer(base + 0))
+	w1 := *(*uint32)(unsafe.Pointer(base + 4))
+	w2 := *(*uint32)(unsafe.Pointer(base + 8))
+	w3 := *(*uint32)(unsafe.Pointer(base + 12))
+	println("osi:", where, "cmd0 words=", w0, w1, w2, w3)
+}
+
+func semTryTake(sem *semaphore) bool {
+	for {
+		cur := atomic.LoadUint32(&sem.count)
+		if cur == 0 {
+			return false
+		}
+		if atomic.CompareAndSwapUint32(&sem.count, cur, cur-1) {
+			return true
+		}
+	}
+}
 
 //export espradio_semphr_create
 func espradio_semphr_create(max, init uint32) unsafe.Pointer {
 	i := atomic.AddUint32(&semaphoreIndex, 1) - 1
-	if i >= 2 {
+	if i >= uint32(len(semaphores)) {
 		panic("espradio: too many semaphores")
 	}
-	ch := make(semaphore, max)
-	for j := uint32(0); j < init; j++ {
-		ch <- struct{}{}
-	}
-	semaphores[i] = ch
+	semaphores[i] = semaphore{count: init}
 	ptr := unsafe.Pointer(&semaphores[i])
-	println("espradio_semphr_create", max, init, "->", ptr)
+	if debugOSI {
+		println("espradio_semphr_create", max, init, "->", ptr)
+	}
 	return ptr
 }
 
 //export espradio_semphr_take
 func espradio_semphr_take(semphr unsafe.Pointer, block_time_tick uint32) int32 {
 	sem := (*semaphore)(semphr)
-	println("espradio_semphr_take", block_time_tick, "sem", semphr)
+	owner := wifiThreadSemOwner(semphr)
+	if debugOSI && owner != nil {
+		println("osi: semphr_take wifi_thread_sem sem=", semphr, "owner_task=", owner, "caller_task=", tinygo_task_current())
+	}
+	if block_time_tick == 0 {
+		if semTryTake(sem) {
+			if debugOSI {
+				println("osi: semphr_take nonblock got sem=", semphr, "count=", atomic.LoadUint32(&sem.count))
+			}
+			return 1
+		}
+		if debugOSI {
+			println("osi: semphr_take nonblock miss sem=", semphr, "count=", atomic.LoadUint32(&sem.count))
+		}
+		return 0
+	}
 
-	select {
-	case <-*sem:
-		return 1
+	forever := block_time_tick == C.OSI_FUNCS_TIME_BLOCKING
+	start := time.Now()
+	var timeout time.Duration
+	if !forever {
+		timeout = time.Duration(block_time_tick) * time.Millisecond
+	}
+
+	if debugOSI {
+		println("osi: semphr_take blocking sem=", semphr, "count=", atomic.LoadUint32(&sem.count), "task=", tinygo_task_current())
+	}
+
+	waitSpins := uint32(0)
+	for {
+		if semTryTake(sem) {
+			if debugOSI {
+				println("osi: semphr_take got it sem=", semphr, "count=", atomic.LoadUint32(&sem.count), "task=", tinygo_task_current())
+			}
+			return 1
+		}
+		waitSpins++
+		if debugOSI && (waitSpins&0x0f) == 0 {
+			println("osi: semphr_take waiting sem=", semphr, "count=", atomic.LoadUint32(&sem.count), "spins=", waitSpins, "task=", tinygo_task_current())
+		}
+		if !forever && time.Since(start) >= timeout {
+			if debugOSI {
+				println("osi: semphr_take timeout sem=", semphr, "spins=", waitSpins, "task=", tinygo_task_current())
+			}
+			return 0
+		}
+		runtime.Gosched()
 	}
 }
 
 //export espradio_semphr_give
 func espradio_semphr_give(semphr unsafe.Pointer) int32 {
 	sem := (*semaphore)(semphr)
-	*sem <- struct{}{}
-	println("espradio_semphr_give", semphr)
+	owner := wifiThreadSemOwner(semphr)
+	if debugOSI && owner != nil {
+		println("osi: semphr_give wifi_thread_sem sem=", semphr, "owner_task=", owner, "caller_task=", tinygo_task_current())
+	}
+	if debugOSI {
+		println("osi: semphr_give sem=", semphr, "count_before=", atomic.LoadUint32(&sem.count))
+	}
+	atomic.AddUint32(&sem.count, 1)
+	if debugOSI {
+		println("osi: semphr_give done sem=", semphr, "count_after=", atomic.LoadUint32(&sem.count))
+	}
 	return 1
 }
 
 //export espradio_semphr_delete
 func espradio_semphr_delete(semphr unsafe.Pointer) {
+	if debugOSI {
+		println("osi: semphr_delete")
+	}
 	sem := (*semaphore)(semphr)
-	close(*sem)
+	atomic.StoreUint32(&sem.count, 0)
 }
 
 //export espradio_wifi_thread_semphr_get
 func espradio_wifi_thread_semphr_get() unsafe.Pointer {
-	if wifiSemaphore == nil {
-		wifiSemaphore = make(semaphore, 1)
+	task := tinygo_task_current()
+	wifiThreadSemMu.Lock()
+	defer wifiThreadSemMu.Unlock()
+	if task == nil {
+		return unsafe.Pointer(&wifiThreadSemNil)
 	}
-	return unsafe.Pointer(&wifiSemaphore)
+	sem := wifiThreadSemByTH[task]
+	if sem == nil {
+		sem = &semaphore{}
+		wifiThreadSemByTH[task] = sem
+	}
+	return unsafe.Pointer(sem)
 }
 
-type queue chan [8]byte
+type queue struct {
+	mu      sync.Mutex
+	storage [][8]byte
+	read    int
+	write   int
+	count   int
+}
+
+func newQueue(capacity int) *queue {
+	return &queue{
+		storage: make([][8]byte, capacity),
+	}
+}
+
+func (q *queue) enqueue(cmd [8]byte) int32 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.count == len(q.storage) {
+		return 0
+	}
+	q.storage[q.write] = cmd
+	q.write++
+	if q.write == len(q.storage) {
+		q.write = 0
+	}
+	q.count++
+	return 1
+}
+
+func (q *queue) dequeue(out *[8]byte) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.count == 0 {
+		return false
+	}
+	*out = q.storage[q.read]
+	q.read++
+	if q.read == len(q.storage) {
+		q.read = 0
+	}
+	q.count--
+	return true
+}
+
+func (q *queue) length() uint32 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return uint32(q.count)
+}
 
 var (
-	wifiQueue    queue
-	wifiQueuePtr unsafe.Pointer
+	wifiQueueObj    *queue
+	wifiQueuePtr    unsafe.Pointer
+	wifiQueueHandle unsafe.Pointer
+	queueMapMu      sync.Mutex
+	queueByAlias    = map[unsafe.Pointer]*queue{}
+	queueByHandle   = map[unsafe.Pointer]*queue{}
 )
 
-func init() {
-	wifiQueue = make(queue, 1)
+func registerQueue(handle unsafe.Pointer, alias unsafe.Pointer, q *queue) {
+	queueMapMu.Lock()
+	queueByHandle[handle] = q
+	if alias != nil {
+		queueByAlias[alias] = q
+	}
+	queueMapMu.Unlock()
+}
+
+func unregisterQueue(handle unsafe.Pointer, alias unsafe.Pointer) {
+	queueMapMu.Lock()
+	delete(queueByHandle, handle)
+	if alias != nil {
+		delete(queueByAlias, alias)
+	}
+	queueMapMu.Unlock()
+}
+
+func kickTimerWorker() {
+	// Timers are polled from the single scheduler goroutine in startSchedTicker.
 }
 
 //export espradio_wifi_create_queue
@@ -163,79 +413,195 @@ func espradio_wifi_create_queue(queue_len, item_size int) unsafe.Pointer {
 	if item_size != 8 {
 		panic("espradio: unexpected queue item_size")
 	}
-	wifiQueuePtr = unsafe.Pointer(&wifiQueue)
-	println("espradio_wifi_create_queue", queue_len, item_size, "&wifiQueue", wifiQueuePtr)
+	if queue_len < 1 {
+		queue_len = 1
+	}
+	wifiQueueObj = newQueue(queue_len)
+	wifiQueueHandle = unsafe.Pointer(wifiQueueObj)
+	wifiQueuePtr = unsafe.Pointer(&wifiQueueHandle)
+	registerQueue(wifiQueueHandle, wifiQueuePtr, wifiQueueObj)
+	if debugOSI {
+		println("espradio_wifi_create_queue", queue_len, item_size, "wifiQueue", wifiQueuePtr)
+	}
 	return wifiQueuePtr
 }
 
 //export espradio_wifi_delete_queue
 func espradio_wifi_delete_queue(ptr unsafe.Pointer) {
-	println("espradio_wifi_delete_queue")
+	if debugOSI {
+		println("espradio_wifi_delete_queue")
+	}
+	unregisterQueue(wifiQueueHandle, wifiQueuePtr)
+	if ptr != nil && ptr != wifiQueuePtr {
+		unregisterQueue(ptr, nil)
+	}
+	wifiQueueObj = nil
+	wifiQueueHandle = nil
+	wifiQueuePtr = nil
 }
 
 func queueFromPtr(ptr unsafe.Pointer) *queue {
-	if ptr == wifiQueuePtr {
-		return (*queue)(ptr)
+	queueMapMu.Lock()
+	q := queueByAlias[ptr]
+	if q == nil {
+		q = queueByHandle[ptr]
 	}
-	realPtr := *(*unsafe.Pointer)(ptr)
-	if realPtr != nil {
-		return (*queue)(realPtr)
+	queueMapMu.Unlock()
+	if q != nil {
+		return q
 	}
-	return (*queue)(wifiQueuePtr)
+	if ptr != nil {
+		handle := *(*unsafe.Pointer)(ptr)
+		queueMapMu.Lock()
+		q = queueByHandle[handle]
+		queueMapMu.Unlock()
+		if q != nil {
+			if debugOSI {
+				println("osi: queueFromPtr deref ptr=", ptr, "handle=", handle, "q=", q)
+			}
+			return q
+		}
+	}
+	if debugOSI {
+		println("osi: queueFromPtr unknown ptr=", ptr)
+	}
+	return nil
+}
+
+//export espradio_yield_and_fire_pending_timers
+func espradio_yield_and_fire_pending_timers() {
+	// 1:1 with esp-wifi timer_compat: setfn should not execute callbacks.
 }
 
 //export espradio_queue_recv
 func espradio_queue_recv(ptr unsafe.Pointer, item unsafe.Pointer, block_time_tick uint32) int32 {
 	q := queueFromPtr(ptr)
-	if block_time_tick != C.OSI_FUNCS_TIME_BLOCKING {
-		panic("espradio: todo: queue_recv with timeout")
+	if q == nil {
+		if debugOSI {
+			println("osi: queue_recv nil queue ptr=", ptr)
+		}
+		return 0
+	}
+	forever := block_time_tick == C.OSI_FUNCS_TIME_BLOCKING
+	start := time.Now()
+	var timeout time.Duration
+	if !forever {
+		timeout = time.Duration(block_time_tick) * time.Millisecond
 	}
 
-	cmd := <-*q
-	println("espradio_queue_recv got cmd", wifiCmdString(cmd[0]),
-		"params:", cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7])
+	if debugOSI {
+		println("osi: queue_recv in ptr=", ptr, "q=", q, "qlen=", q.length(), "stack_left=", C.espradio_stack_remaining(), "task=", tinygo_task_current())
+	}
+
+	var cmd [8]byte
+	waitSpins := uint32(0)
+	for {
+		if q.dequeue(&cmd) {
+			goto got
+		}
+		waitSpins++
+		if debugOSI && (waitSpins&0xfffff) == 0 {
+			println("osi: queue_recv waiting spins=", waitSpins, "qlen=", q.length())
+		}
+		kickTimerWorker()
+		if !forever && time.Since(start) >= timeout {
+			if debugOSI {
+				println("osi: queue_recv timeout ptr=", ptr, "qlen=", q.length(), "task=", tinygo_task_current())
+			}
+			return 0
+		}
+		runtime.Gosched()
+	}
+
+got:
+	println("osi: queue_recv got cmd=", cmd[0])
+	debugDumpCmd6("queue_recv", cmd)
+	debugDumpCmd0("queue_recv", cmd)
+	if debugOSI && cmd[0] == 7 {
+		println("osi: queue_recv cmd7 bytes=", cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7], "task=", tinygo_task_current())
+	}
+	if debugOSI {
+		println("osi: queue_recv out cmd=", cmd[0], "stack_left=", C.espradio_stack_remaining(), "task=", tinygo_task_current())
+	}
+	if cmd[0] == 6 && binary.LittleEndian.Uint32(cmd[4:8]) == 0 {
+		if debugOSI {
+			println("osi: queue_recv type=6 ptr=0, dropping to avoid pc:nil")
+		}
+		return 0
+	}
 	*(*[8]byte)(item) = cmd
-	println("espradio_queue_recv return")
+	C.espradio_ensure_osi_ptr()
+	if debugOSI {
+		println("osi: queue_recv qlen_after=", q.length())
+	}
 	return 1
 }
 
 //export espradio_queue_send
 func espradio_queue_send(ptr unsafe.Pointer, item unsafe.Pointer, block_time_tick uint32) int32 {
 	q := queueFromPtr(ptr)
+	if q == nil {
+		if debugOSI {
+			println("osi: queue_send nil queue ptr=", ptr)
+		}
+		return 0
+	}
 	cmd := *(*[8]byte)(item)
-	println("espradio_queue_send", block_time_tick, "cmd", wifiCmdString(cmd[0]))
-	*q <- cmd
-	return 1
+	for i := 0; i < 100 && cmd[0] == 6 && binary.LittleEndian.Uint32(cmd[4:8]) == 0; i++ {
+		runtime.Gosched()
+		cmd = *(*[8]byte)(item)
+	}
+	if debugOSI {
+		if cmd[0] == 6 {
+			println("osi: queue_send type=6 ptr=", binary.LittleEndian.Uint32(cmd[4:8]))
+		} else {
+			println("osi: queue_send cmd=", cmd[0])
+		}
+	}
+	debugDumpCmd6("queue_send", cmd)
+	debugDumpCmd0("queue_send", cmd)
+
+	_ = block_time_tick
+	rc := q.enqueue(cmd)
+	if debugOSI && cmd[0] == 7 {
+		println("osi: queue_send cmd=7 ptr=", ptr, "q=", q, "rc=", rc, "qlen=", q.length(), "task=", tinygo_task_current(),
+			"bytes=", cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7])
+	}
+	return rc
 }
 
 //export espradio_queue_len
 func espradio_queue_len(ptr unsafe.Pointer) uint32 {
 	q := queueFromPtr(ptr)
-	return uint32(len(*q))
+	if q == nil {
+		return 0
+	}
+	return q.length()
 }
 
 type eventGroup struct {
 	mu   sync.Mutex
-	cond *sync.Cond
 	bits uint32
 }
 
 func newEventGroup() *eventGroup {
-	eg := &eventGroup{}
-	eg.cond = sync.NewCond(&eg.mu)
-	return eg
+	return &eventGroup{}
 }
 
 //export espradio_event_group_create
 func espradio_event_group_create() unsafe.Pointer {
 	eg := newEventGroup()
-	println("espradio_event_group_create", eg)
+	if debugOSI {
+		println("espradio_event_group_create", eg)
+	}
 	return unsafe.Pointer(eg)
 }
 
 //export espradio_event_group_delete
 func espradio_event_group_delete(ptr unsafe.Pointer) {
-	println("espradio_event_group_delete", ptr)
+	if debugOSI {
+		println("espradio_event_group_delete", ptr)
+	}
 	eg := (*eventGroup)(ptr)
 	eg.mu.Lock()
 	eg.bits = 0
@@ -249,8 +615,9 @@ func espradio_event_group_set_bits(ptr unsafe.Pointer, bits uint32) uint32 {
 	eg.bits |= bits
 	cur := eg.bits
 	eg.mu.Unlock()
-	eg.cond.Broadcast()
-	println("espradio_event_group_set_bits", ptr, "bits", bits, "->", cur)
+	if debugOSI {
+		println("espradio_event_group_set_bits", ptr, "bits", bits, "->", cur)
+	}
 	return cur
 }
 
@@ -261,7 +628,9 @@ func espradio_event_group_clear_bits(ptr unsafe.Pointer, bits uint32) uint32 {
 	eg.bits &^= bits
 	cur := eg.bits
 	eg.mu.Unlock()
-	println("espradio_event_group_clear_bits", ptr, "bits", bits, "->", cur)
+	if debugOSI {
+		println("espradio_event_group_clear_bits", ptr, "bits", bits, "->", cur)
+	}
 	return cur
 }
 
@@ -269,48 +638,57 @@ func espradio_event_group_clear_bits(ptr unsafe.Pointer, bits uint32) uint32 {
 func espradio_event_group_wait_bits(ptr unsafe.Pointer, bitsToWaitFor uint32, clearOnExit int32, waitForAllBits int32, blockTimeTick uint32) uint32 {
 	eg := (*eventGroup)(ptr)
 	want := bitsToWaitFor
+	const foreverFallback = 200 * time.Millisecond
 
-	predicate := func() bool {
+	matches := func(bits uint32) bool {
 		if waitForAllBits != 0 {
-			return eg.bits&want == want
+			return bits&want == want
 		}
-		return eg.bits&want != 0
+		return bits&want != 0
 	}
 
-	eg.mu.Lock()
-	defer eg.mu.Unlock()
+	if debugOSI {
+		eg.mu.Lock()
+		cur := eg.bits
+		eg.mu.Unlock()
+		println("espradio_event_group_wait_bits enter", ptr, "want", want, "bits", cur, "block", blockTimeTick)
+	}
 
-	println("espradio_event_group_wait_bits enter", ptr, "want", want, "bits", eg.bits, "block", blockTimeTick)
+	forever := blockTimeTick == C.OSI_FUNCS_TIME_BLOCKING
+	start := time.Now()
+	var timeout time.Duration
+	if !forever {
+		timeout = time.Duration(blockTimeTick) * time.Millisecond
+	}
 
-	switch {
-	case blockTimeTick == 0:
-		// Just check the current state.
-	case blockTimeTick == C.OSI_FUNCS_TIME_BLOCKING:
-		for !predicate() {
-			eg.cond.Wait()
-		}
-	default:
-		timeout := time.Duration(ticksToMilliseconds(blockTimeTick)) * time.Millisecond
-		deadline := time.Now().Add(timeout)
-		for !predicate() {
-			now := time.Now()
-			if !now.Before(deadline) {
-				break
+	var snapshot uint32
+	for {
+		eg.mu.Lock()
+		snapshot = eg.bits
+		ok := matches(snapshot)
+		if ok {
+			if clearOnExit != 0 {
+				eg.bits &^= want
+				if debugOSI {
+					println("espradio_event_group_wait_bits clearOnExit", ptr, "clear", want, "->", eg.bits)
+				}
 			}
-			// cond.Wait has no timeout, so we approximate with sleep loops.
 			eg.mu.Unlock()
-			time.Sleep(10 * time.Millisecond)
-			eg.mu.Lock()
+			if debugOSI {
+				println("espradio_event_group_wait_bits exit", ptr, "want", want, "got", snapshot)
+			}
+			// FreeRTOS-compatible: return bits before clearOnExit mutation.
+			return snapshot
 		}
-	}
+		eg.mu.Unlock()
+		println("osi: event_group_wait_bits waiting for bits", want, "bits", snapshot)
 
-	cur := eg.bits
-	if predicate() && clearOnExit != 0 {
-		eg.bits &^= want
-		println("espradio_event_group_wait_bits clearOnExit", ptr, "clear", want, "->", eg.bits)
-		cur = eg.bits
+		if blockTimeTick == 0 || (!forever && time.Since(start) >= timeout) {
+			if debugOSI {
+				println("espradio_event_group_wait_bits exit", ptr, "want", want, "got", snapshot)
+			}
+			return snapshot
+		}
+		runtime.Gosched()
 	}
-
-	println("espradio_event_group_wait_bits exit", ptr, "want", want, "got", cur)
-	return cur
 }

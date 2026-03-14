@@ -11,10 +11,17 @@ func main() {
 
 	println("initializing radio...")
 	err := espradio.Enable(espradio.Config{
-		Logging: espradio.LogLevelInfo,
+		Logging: espradio.LogLevelVerbose,
 	})
 	if err != nil {
 		println("could not enable radio:", err)
+		return
+	}
+
+	println("starting radio...")
+	err = espradio.Start()
+	if err != nil {
+		println("could not start radio:", err)
 		return
 	}
 

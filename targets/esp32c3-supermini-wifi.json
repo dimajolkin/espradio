@@ -1,0 +1,4 @@
+{
+	"inherits": ["esp32c3-supermini"],
+	"linkerscript": "targets/esp32c3.ld"
+}
