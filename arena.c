@@ -11,7 +11,12 @@ void  espradio_arena_free(void *p)                   { free(p); }
 void *espradio_arena_realloc(void *ptr, size_t new_size) {
     if (!ptr) return malloc(new_size);
     if (new_size == 0) { free(ptr); return NULL; }
-    return realloc(ptr, new_size);
+    void *np = malloc(new_size);
+    if (np) {
+        memcpy(np, ptr, new_size);
+        free(ptr);
+    }
+    return np;
 }
 
 void espradio_arena_stats(uint32_t *used, uint32_t *capacity) {

@@ -42,6 +42,13 @@ int espradio_start_ap_impl(const char *ssid, size_t ssid_len,
     const char *password, size_t pwd_len, uint8_t channel, int auth_open);
 extern esp_err_t esp_wifi_connect_internal(void);
 
+/* ===== netif (netif.c) ===== */
+esp_err_t espradio_netif_start_rx(void);
+int       espradio_netif_rx_available(void);
+uint16_t  espradio_netif_rx_pop(void *dst, uint16_t dst_len);
+int       espradio_netif_tx(void *buf, uint16_t len);
+esp_err_t espradio_netif_get_mac(uint8_t mac[6]);
+
 /* ===== C → Go (//export из Go, резолвятся линкером) ===== */
 __attribute__((noreturn))
 extern void espradio_panic(char *s);

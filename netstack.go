@@ -900,12 +900,24 @@ func (ns *NetStack) TCPDial(ip [4]byte, port uint16) (int, error) {
 	s.state = _TCP_SYN_SENT
 	ns.sendTCPFlags(s, _SYN, nil)
 
-	select {
-	case err := <-s.connDone:
-		return fd, err
-	case <-time.After(10 * time.Second):
-		s.state = _TCP_CLOSED
-		return -1, errTimeout
+	retries := 0
+	for {
+		wait := time.Duration(1<<retries) * time.Second
+		if wait > 4*time.Second {
+			wait = 4 * time.Second
+		}
+		select {
+		case err := <-s.connDone:
+			return fd, err
+		case <-time.After(wait):
+			retries++
+			if retries >= 5 {
+				s.state = _TCP_CLOSED
+				return -1, errTimeout
+			}
+			s.seq = uint32(time.Now().UnixNano() & 0x7FFFFFFF)
+			ns.sendTCPFlags(s, _SYN, nil)
+		}
 	}
 }
 
