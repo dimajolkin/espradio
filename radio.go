@@ -8,8 +8,8 @@ package espradio
 #cgo CFLAGS: -Iblobs/include/local
 #cgo CFLAGS: -Iblobs/headers
 #cgo CFLAGS: -DCONFIG_SOC_WIFI_NAN_SUPPORT=0
-#cgo CFLAGS: -DESPRADIO_PHY_PATCH_ROMFUNCS=1
-#cgo LDFLAGS: -Lblobs/libs/esp32c3 -lcore -lmesh -lnet80211 -lespnow -lregulatory -lphy -lpp -lwpa_supplicant
+#cgo CFLAGS: -DESPRADIO_PHY_PATCH_ROMFUNCS=0
+#cgo LDFLAGS: -Lblobs/libs/esp32c3 -lcoexist -lcore -lmesh -lnet80211 -lespnow -lregulatory -lphy -lpp -lwpa_supplicant
 
 #include "include.h"
 void espradio_set_blob_log_level(uint32_t level);

@@ -142,6 +142,13 @@ esp_err_t espradio_wifi_init(void) {
     esp_wifi_bt_power_domain_on();
     printf("espradio: after esp_wifi_bt_power_domain_on\n");
     espradio_bt_irq_prewire();
+
+    extern void espradio_coex_adapter_init(void);
+    extern int coex_pre_init(void);
+    espradio_coex_adapter_init();
+    int coex_rc = coex_pre_init();
+    printf("espradio: coex_pre_init -> %d\n", coex_rc);
+
     esp_err_t ret = esp_wifi_init_internal(&cfg);
     if (ret == 0) {
         extern void esp_phy_modem_init(void);

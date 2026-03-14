@@ -1421,14 +1421,7 @@ coex_adapter_funcs_t g_coex_adapter_funcs = {
     ._magic = COEX_ADAPTER_MAGIC,
 };
 
-__attribute__((weak))
-esp_err_t esp_coex_adapter_register(coex_adapter_funcs_t *funcs) {
-    (void)funcs;
-#if ESPRADIO_OSI_DEBUG
-    printf("osi: esp_coex_adapter_register (stub)\n");
-#endif
-    return 0;
-}
+extern esp_err_t esp_coex_adapter_register(coex_adapter_funcs_t *funcs);
 
 void espradio_coex_adapter_init(void) {
     esp_err_t r = esp_coex_adapter_register(&g_coex_adapter_funcs);
@@ -1555,5 +1548,8 @@ wifi_osi_funcs_t espradio_osi_funcs = {
     ._coex_schm_process_restart = espradio_coex_schm_process_restart,
     ._coex_schm_register_cb = espradio_coex_schm_register_cb,
     ._coex_register_start_cb = espradio_coex_register_start_cb,
+    ._coex_schm_flexible_period_set = espradio_coex_schm_flexible_period_set,
+    ._coex_schm_flexible_period_get = espradio_coex_schm_flexible_period_get,
+    ._coex_schm_get_phase_by_idx = espradio_coex_schm_get_phase_by_idx,
     ._magic = ESP_WIFI_OS_ADAPTER_MAGIC,
 };
