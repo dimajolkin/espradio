@@ -25,6 +25,13 @@ int espradio_esp_timer_poll_due(int max_fire);
 void espradio_prepare_memory_for_wifi(void);
 void espradio_ensure_osi_ptr(void);
 void espradio_coex_adapter_init(void);
+void espradio_call_saved_isr(int32_t n);
+int32_t espradio_queue_send(void *queue, void *item, uint32_t block_time_tick);
+uint32_t espradio_isr_ring_head(void);
+uint32_t espradio_isr_ring_tail(void);
+void     espradio_isr_ring_advance_tail(void);
+void    *espradio_isr_ring_entry_queue(uint32_t idx);
+void    *espradio_isr_ring_entry_item(uint32_t idx);
 void espradio_set_task_stack_bottom(unsigned long bottom);
 unsigned long espradio_stack_remaining(void);
 uint32_t espradio_wifi_boot_state(void);
@@ -361,4 +368,28 @@ func espradio_wifi_int_disable(wifi_int_mux unsafe.Pointer) uint32 {
 //export espradio_wifi_int_restore
 func espradio_wifi_int_restore(wifi_int_mux unsafe.Pointer, tmp uint32) {
 	interrupt.Restore(interrupt.State(tmp))
+}
+
+var wifiISR interrupt.Interrupt
+
+func initWiFiISR() {
+	wifiISR = interrupt.New(1, func(interrupt.Interrupt) {
+		C.espradio_call_saved_isr(1)
+	})
+}
+
+func enableWiFiISR() {
+	wifiISR.Enable()
+	println("isr: WiFi interrupt 1 enabled")
+}
+
+func drainISRQueue() {
+	for C.espradio_isr_ring_tail() != C.espradio_isr_ring_head() {
+		println("osi: drainISRQueue")
+		idx := C.espradio_isr_ring_tail()
+		q := C.espradio_isr_ring_entry_queue(idx)
+		item := C.espradio_isr_ring_entry_item(idx)
+		C.espradio_queue_send(q, item, 0)
+		C.espradio_isr_ring_advance_tail()
+	}
 }

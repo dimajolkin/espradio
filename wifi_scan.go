@@ -53,6 +53,8 @@ func Start() error {
 		return makeError(code)
 	}
 
+	enableWiFiISR()
+
 	return nil
 }
 
