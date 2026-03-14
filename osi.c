@@ -1,6 +1,7 @@
 //go:build esp32c3
 
 #include "include.h"
+#include "esp_coexist_internal.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -1198,29 +1199,28 @@ void * espradio_wifi_create_queue(int queue_len, int item_size);
 
 void espradio_wifi_delete_queue(void * queue);
 
-int espradio_coex_init(void);
-void espradio_coex_deinit(void);
-int espradio_coex_enable(void);
-void espradio_coex_disable(void);
-uint32_t espradio_coex_status_get(void);
-void espradio_coex_condition_set(uint32_t type, bool dissatisfy);
-int espradio_coex_wifi_request(uint32_t event, uint32_t latency, uint32_t duration);
-int espradio_coex_wifi_release(uint32_t event);
-int espradio_coex_wifi_channel_set(uint8_t primary, uint8_t secondary);
-int espradio_coex_event_duration_get(uint32_t event, uint32_t *duration);
-int espradio_coex_pti_get(uint32_t event, uint8_t *pti);
-void espradio_coex_schm_status_bit_clear(uint32_t type, uint32_t status);
-void espradio_coex_schm_status_bit_set(uint32_t type, uint32_t status);
-int espradio_coex_schm_interval_set(uint32_t interval);
-uint32_t espradio_coex_schm_interval_get(void);
-uint8_t espradio_coex_schm_curr_period_get(void);
-void *espradio_coex_schm_curr_phase_get(void);
-int espradio_coex_schm_process_restart(void);
-int espradio_coex_schm_register_cb(int type, int (*cb)(int));
-int espradio_coex_register_start_cb(int (*cb)(void));
-int espradio_coex_schm_flexible_period_set(uint8_t period);
-uint8_t espradio_coex_schm_flexible_period_get(void);
-void *espradio_coex_schm_get_phase_by_idx(int idx);
+extern void espradio_wdev_last_desc_reset_prepare(void);
+extern int coex_schm_flexible_period_set(uint8_t period);
+extern uint8_t coex_schm_flexible_period_get(void);
+
+static uint32_t espradio_coex_status_get(void) {
+    espradio_ensure_osi_ptr();
+    return coex_status_get(0);
+}
+
+static void espradio_coex_condition_set(uint32_t type, bool dissatisfy) {
+    (void)type;
+    (void)dissatisfy;
+}
+
+static int espradio_coex_wifi_release(uint32_t event) {
+    espradio_wdev_last_desc_reset_prepare();
+    return coex_wifi_release(event);
+}
+
+static int espradio_coex_schm_register_cb(int type, int (*cb)(int)) {
+    return coex_schm_register_callback((coex_schm_callback_type_t)type, (void *)cb);
+}
 
 /* Coexistence adapter (esp_coexist_adapter.h) ********************************************/
 
@@ -1487,28 +1487,28 @@ wifi_osi_funcs_t espradio_osi_funcs = {
     ._wifi_zalloc = espradio_wifi_zalloc,
     ._wifi_create_queue = espradio_wifi_create_queue,
     ._wifi_delete_queue = espradio_wifi_delete_queue,
-    ._coex_init = espradio_coex_init,
-    ._coex_deinit = espradio_coex_deinit,
-    ._coex_enable = espradio_coex_enable,
-    ._coex_disable = espradio_coex_disable,
+    ._coex_init = coex_init,
+    ._coex_deinit = coex_deinit,
+    ._coex_enable = coex_enable,
+    ._coex_disable = coex_disable,
     ._coex_status_get = espradio_coex_status_get,
     ._coex_condition_set = espradio_coex_condition_set,
-    ._coex_wifi_request = espradio_coex_wifi_request,
+    ._coex_wifi_request = coex_wifi_request,
     ._coex_wifi_release = espradio_coex_wifi_release,
-    ._coex_wifi_channel_set = espradio_coex_wifi_channel_set,
-    ._coex_event_duration_get = espradio_coex_event_duration_get,
-    ._coex_pti_get = espradio_coex_pti_get,
-    ._coex_schm_status_bit_clear = espradio_coex_schm_status_bit_clear,
-    ._coex_schm_status_bit_set = espradio_coex_schm_status_bit_set,
-    ._coex_schm_interval_set = espradio_coex_schm_interval_set,
-    ._coex_schm_interval_get = espradio_coex_schm_interval_get,
-    ._coex_schm_curr_period_get = espradio_coex_schm_curr_period_get,
-    ._coex_schm_curr_phase_get = espradio_coex_schm_curr_phase_get,
-    ._coex_schm_process_restart = espradio_coex_schm_process_restart,
+    ._coex_wifi_channel_set = coex_wifi_channel_set,
+    ._coex_event_duration_get = coex_event_duration_get,
+    ._coex_pti_get = coex_pti_get,
+    ._coex_schm_status_bit_clear = coex_schm_status_bit_clear,
+    ._coex_schm_status_bit_set = coex_schm_status_bit_set,
+    ._coex_schm_interval_set = coex_schm_interval_set,
+    ._coex_schm_interval_get = coex_schm_interval_get,
+    ._coex_schm_curr_period_get = coex_schm_curr_period_get,
+    ._coex_schm_curr_phase_get = coex_schm_curr_phase_get,
+    ._coex_schm_process_restart = coex_schm_process_restart,
     ._coex_schm_register_cb = espradio_coex_schm_register_cb,
-    ._coex_register_start_cb = espradio_coex_register_start_cb,
-    ._coex_schm_flexible_period_set = espradio_coex_schm_flexible_period_set,
-    ._coex_schm_flexible_period_get = espradio_coex_schm_flexible_period_get,
-    ._coex_schm_get_phase_by_idx = espradio_coex_schm_get_phase_by_idx,
+    ._coex_register_start_cb = coex_register_start_cb,
+    ._coex_schm_flexible_period_set = coex_schm_flexible_period_set,
+    ._coex_schm_flexible_period_get = coex_schm_flexible_period_get,
+    ._coex_schm_get_phase_by_idx = coex_schm_get_phase_by_idx,
     ._magic = ESP_WIFI_OS_ADAPTER_MAGIC,
 };

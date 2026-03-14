@@ -1,15 +1,7 @@
 //go:build esp32c3
 
-package espradio
+package esp32c3
 
-/*
-void espradio_hal_init_clocks_go(void);
-void espradio_hal_disable_clocks_go(void);
-void espradio_hal_wifi_rtc_enable_iso_go(void);
-void espradio_hal_wifi_rtc_disable_iso_go(void);
-void espradio_hal_reset_wifi_mac_go(void);
-int espradio_hal_read_mac_go(unsigned char *mac, unsigned int iftype);
-*/
 import "C"
 
 import (
@@ -85,9 +77,6 @@ func espradio_hal_read_mac_go(mac *C.uchar, iftype C.uint) C.int {
 		return -1
 	}
 
-	// ESP32-C3 eFuse MAC layout:
-	// - RD_MAC_SPI_SYS_0: lower 32 bits
-	// - RD_MAC_SPI_SYS_1.MAC_1: upper 16 bits
 	w0 := esp.EFUSE.GetRD_MAC_SPI_SYS_0()
 	w1 := esp.EFUSE.GetRD_MAC_SPI_SYS_1_MAC_1()
 
@@ -100,7 +89,7 @@ func espradio_hal_read_mac_go(mac *C.uchar, iftype C.uint) C.int {
 	m[5] = byte(w0 & 0xff)
 
 	if iftype != 0 {
-		m[0] |= 0x02 // locally administered for derived interfaces
+		m[0] |= 0x02
 		m[5] = byte(uint32(m[5]) + uint32(iftype))
 	}
 

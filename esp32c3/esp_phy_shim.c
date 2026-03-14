@@ -4,9 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "blobs/include/esp_phy_init.h"
-#include "blobs/include/esp_phy.h"
-#include "blobs/include/esp_timer.h"
+#include "esp_phy_init.h"
+#include "esp_phy.h"
+#include "esp_timer.h"
 
 #ifndef ESPRADIO_PHY_STUB_TEST
 #define ESPRADIO_PHY_STUB_TEST 0

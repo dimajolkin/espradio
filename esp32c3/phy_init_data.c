@@ -1,7 +1,7 @@
 //go:build esp32c3
 
-#include "blobs/include/esp_phy_init.h"
-#include "blobs/include/esp_err.h"
+#include "esp_phy_init.h"
+#include "esp_err.h"
 
 #ifndef ESPRADIO_PHY_INIT_DATA_DEBUG
 #define ESPRADIO_PHY_INIT_DATA_DEBUG 0
