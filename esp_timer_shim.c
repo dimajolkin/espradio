@@ -1,5 +1,3 @@
-//go:build esp32c3
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -135,6 +133,13 @@ int espradio_esp_timer_poll_due(int max_fire) {
             continue;
         }
         if (now < t->expiry_us) {
+            continue;
+        }
+        uintptr_t cb_addr = (uintptr_t)t->callback;
+        if (cb_addr < 0x40000000u || cb_addr >= 0x42800000u) {
+            printf("esp_timer: BAD callback=%p arg=%p — skipping\n",
+                   (void *)t->callback, t->arg);
+            t->active = false;
             continue;
         }
         t->callback(t->arg);

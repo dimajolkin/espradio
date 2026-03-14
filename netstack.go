@@ -820,13 +820,9 @@ func (ns *NetStack) sendDHCPMsg(xid uint32, msgType byte, reqIP [4]byte, serverI
 	binary.BigEndian.PutUint16(udp[2:4], 67)
 	binary.BigEndian.PutUint16(udp[4:6], uint16(len(udp)))
 	copy(udp[8:], dhcp)
-	if ns.debug {
-		println("sendDHCPMsg: sending", len(udp)+20+14, "bytes, type=", msgType)
-	}
+	println("sendDHCPMsg: sending", len(udp)+20+14, "bytes, type=", msgType)
 	if err := ns.sendIPBcast(17, udp); err != nil {
-		if ns.debug {
-			println("sendDHCPMsg: TX error:", err)
-		}
+		println("sendDHCPMsg: TX error:", err)
 	}
 }
 

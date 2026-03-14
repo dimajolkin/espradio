@@ -1,5 +1,3 @@
-//go:build esp32c3
-
 #include "include.h"
 #include "esp_coexist_internal.h"
 #include <stdarg.h>
@@ -14,19 +12,38 @@
 #include <stdint.h>
 
 static volatile uintptr_t g_task_stack_bottom;
+static volatile uintptr_t g_task_stack_top;
+static volatile uintptr_t g_stack_watermark;
 #define ESPRADIO_PHY_MODEM_WIFI 1u
 
 void espradio_set_task_stack_bottom(uintptr_t bottom) {
     g_task_stack_bottom = bottom;
 }
 
-/* Returns remaining stack bytes for the current task (when called from WiFi task goroutine). */
+void espradio_set_task_stack_top(uintptr_t top) {
+    g_task_stack_top = top;
+    g_stack_watermark = top;
+}
+
+static inline void espradio_stack_check(void) {
+    uintptr_t sp;
+    __asm__ volatile ("mv %0, sp" : "=r"(sp));
+    if (sp < g_stack_watermark) {
+        g_stack_watermark = sp;
+    }
+}
+
 unsigned long espradio_stack_remaining(void) {
     if (g_task_stack_bottom == 0) return 0;
     uintptr_t sp;
     __asm__ volatile ("mv %0, sp" : "=r"(sp));
     if (sp <= g_task_stack_bottom) return 0;
     return (unsigned long)(sp - g_task_stack_bottom);
+}
+
+unsigned long espradio_stack_watermark(void) {
+    if (g_task_stack_top == 0 || g_stack_watermark == 0) return 0;
+    return (unsigned long)(g_task_stack_top - g_stack_watermark);
 }
 
 __attribute__((noreturn))
@@ -177,10 +194,12 @@ static void espradio_queue_delete(void *queue) {
 int32_t espradio_queue_send(void *queue, void *item, uint32_t block_time_tick);
 
 static int32_t espradio_queue_send_to_back(void *queue, void *item, uint32_t block_time_tick) {
+    espradio_stack_check();
     return espradio_queue_send(queue, item, block_time_tick);
 }
 
 static int32_t espradio_queue_send_to_front(void *queue, void *item, uint32_t block_time_tick) {
+    espradio_stack_check();
     return espradio_queue_send(queue, item, block_time_tick);
 }
 
@@ -309,7 +328,6 @@ static volatile int s_event_loop_ready;
 static int s_event_lock;
 static unsigned s_event_queued;
 static const char s_wifi_event_base[] = "WIFI_EVENT";
-extern void espradio_event_loop_kick_go(void);
 static void event_lock(void) {
     unsigned spins = 0;
     while (__sync_lock_test_and_set(&s_event_lock, 1)) {
@@ -374,6 +392,7 @@ esp_err_t esp_event_handler_register(esp_event_base_t event_base, int32_t event_
 }
 
 void espradio_event_loop_run_once(void) {
+    espradio_stack_check();
     if (!s_event_loop_ready) return;
 #if ESPRADIO_OSI_DEBUG
     static uint32_t s_event_loop_idle_log_throttle = 0;
@@ -404,8 +423,15 @@ void espradio_event_loop_run_once(void) {
 #endif
     const char *base = e->base ? e->base : "(null)";
     for (event_handler_t *h = s_handler_head; h; h = h->next) {
-        if ((!h->base || strcmp(h->base, base) == 0) && (h->id == ESP_EVENT_ANY_ID || h->id == e->id) && h->handler)
+        if ((!h->base || strcmp(h->base, base) == 0) && (h->id == ESP_EVENT_ANY_ID || h->id == e->id) && h->handler) {
+            uintptr_t ha = (uintptr_t)h->handler;
+            if (ha < 0x40000000u || ha >= 0x42800000u) {
+                printf("osi: event_loop BAD handler=%p base=%s id=%ld — skipping\n",
+                       (void *)h->handler, base, (long)e->id);
+                continue;
+            }
             h->handler(h->arg, (esp_event_base_t)base, e->id, e->data);
+        }
     }
     if (e->base != s_wifi_event_base)
         espradio_arena_free(e->base);
@@ -431,7 +457,7 @@ void espradio_event_register_default_cb(void) {
  * Queue event and return 0 so driver does not take the error path.
  * Вызывается из wifi task, в т.ч. для HOME_CHANNEL_CHANGE (41/43).
  *************************************************************************/
-int32_t espradio_event_post(const char* event_base, int32_t event_id, void* event_data, size_t event_data_size, uint32_t ticks_to_wait) {
+esp_err_t esp_event_post(esp_event_base_t event_base, int32_t event_id, const void* event_data, size_t event_data_size, uint32_t ticks_to_wait) {
     (void)ticks_to_wait;
     printf("EVENT_POST: base=%s id=%ld size=%zu\n",
            event_base ? event_base : "(null)", (long)event_id, (size_t)event_data_size);
@@ -492,7 +518,6 @@ int32_t espradio_event_post(const char* event_base, int32_t event_id, void* even
     s_event_tail = e;
     s_event_queued++;
     event_unlock();
-    espradio_event_loop_kick_go();
     // Keep esp_event_post asynchronous (IDF-like): wake scheduler and yield.
     espradio_task_yield_go();
 #if ESPRADIO_OSI_DEBUG
@@ -642,7 +667,6 @@ static int timer_slot_alloc(void *ptimer) {
 
 int espradio_timer_poll_due(int max_fire);
 void espradio_task_yield_go(void);
-void espradio_event_loop_kick_go(void);
 
 void espradio_timer_fire(void *ptimer);
 
@@ -807,6 +831,12 @@ void espradio_timer_fire(void *ptimer) {
     printf("osi: timer_fire resolved ptimer=%p slot=%d fn=%p arg=%p\n", (void *)ptimer, i, (void *)fn, arg);
  #endif
     if (fn) {
+        uintptr_t addr = (uintptr_t)fn;
+        if (addr < 0x40000000u || addr >= 0x42800000u) {
+            printf("osi: timer_fire BAD fn=%p arg=%p ptimer=%p slot=%d — skipping\n",
+                   (void *)fn, arg, (void *)ptimer, i);
+            return;
+        }
 #if ESPRADIO_OSI_DEBUG
         printf("osi: timer_fire calling fn=%p arg=%p\n", (void *)fn, arg);
 #endif
@@ -1181,9 +1211,6 @@ void espradio_arena_stats(uint32_t *used, uint32_t *capacity);
 void espradio_alloc_stats(unsigned *out_alloc, unsigned *out_free) {
     if (out_alloc) *out_alloc = espradio_alloc_count;
     if (out_free) *out_free = espradio_free_count;
-    uint32_t used, cap;
-    espradio_arena_stats(&used, &cap);
-    printf("osi: arena %lu / %lu bytes\n", (unsigned long)used, (unsigned long)cap);
 }
 
 void *pvPortMalloc(size_t size) {
@@ -1301,8 +1328,7 @@ static int64_t espradio_coex_adapter_esp_timer_get_time(void) {
 #if ESPRADIO_OSI_DEBUG
     printf("coex_adapter: esp_timer_get_time\n");
 #endif
-    /* Simple stub: time base not critical for detecting usage. */
-    return 0;
+    return (int64_t)espradio_time_us_now();
 }
 
 static bool espradio_coex_adapter_env_is_chip(void) {
@@ -1436,7 +1462,7 @@ wifi_osi_funcs_t espradio_osi_funcs = {
     ._task_get_max_priority = espradio_task_get_max_priority,
     ._malloc = espradio_malloc,
     ._free = espradio_free,
-    ._event_post = espradio_event_post,
+    ._event_post = (int32_t (*)(const char *, int32_t, void *, size_t, uint32_t))esp_event_post,
     ._get_free_heap_size = espradio_get_free_heap_size,
     ._rand = espradio_rand,
     ._dport_access_stall_other_cpu_start_wrap = espradio_dport_access_stall_other_cpu_start_wrap,

@@ -155,30 +155,3 @@ void espradio_pll_trace_readback(const char *op, uint32_t block, uint32_t host, 
         espradio_panic("espradio: phy: i2c readback mismatch");
     }
 }
-
-void espradio_test_pll(void) {
-    const uint32_t blk = 0x62u;
-    const uint32_t host = 1u;
-    uint32_t r7_before = rom_chip_i2c_readReg(blk, host, 7u) & 0xffu;
-    uint32_t r1_before = rom_chip_i2c_readReg(blk, host, 1u) & 0xffu;
-    uint32_t r2_before = rom_chip_i2c_readReg(blk, host, 2u) & 0xffu;
-
-    PLL_DBG("espradio: test_pll begin r7=0x%02lx r1=0x%02lx r2=0x%02lx\n",
-           (unsigned long)r7_before,
-           (unsigned long)r1_before,
-           (unsigned long)r2_before);
-
-    rom_chip_i2c_writeReg(blk, host, 1u, 0xffu);
-    rom_chip_i2c_writeReg(blk, host, 2u, 0xf0u);
-
-    uint32_t r1_after = rom_chip_i2c_readReg(blk, host, 1u) & 0xffu;
-    uint32_t r2_after = rom_chip_i2c_readReg(blk, host, 2u) & 0xffu;
-    uint32_t r7_after = rom_chip_i2c_readReg(blk, host, 7u) & 0xffu;
-    uint32_t r7_bit1 = rom_i2c_readReg_Mask(blk, host, 7u, 1u, 1u) & 0xffu;
-
-    PLL_DBG("espradio: test_pll after w r1=0x%02lx r2=0x%02lx r7=0x%02lx r7b1=%lu\n",
-           (unsigned long)r1_after,
-           (unsigned long)r2_after,
-           (unsigned long)r7_after,
-           (unsigned long)r7_bit1);
-}

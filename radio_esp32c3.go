@@ -5,6 +5,7 @@ package espradio
 /*
 #include "include.h"
 unsigned long espradio_stack_remaining(void);
+unsigned long espradio_stack_watermark(void);
 int espradio_fire_one_pending_timer(void);
 void espradio_ensure_osi_ptr(void);
 */
@@ -14,11 +15,12 @@ import (
 	"device/esp"
 	"encoding/binary"
 	"fmt"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"runtime"
 
 	_ "tinygo.org/x/espradio/esp32c3"
 )
@@ -157,7 +159,7 @@ func espradio_mutex_lock(cmut unsafe.Pointer) int32 {
 			println("osi: mutex_lock waiting", cmut, "owner=", mut.owner, "me=", me, "count=", mut.count, "spins=", waitSpins)
 		}
 		mut.state.Unlock()
-		runtime.Gosched()
+		safeGosched()
 	}
 }
 
@@ -318,7 +320,7 @@ func espradio_semphr_take(semphr unsafe.Pointer, block_time_tick uint32) int32 {
 			}
 			return 0
 		}
-		runtime.Gosched()
+		safeGosched()
 	}
 }
 
@@ -578,29 +580,13 @@ func espradio_queue_recv(ptr unsafe.Pointer, item unsafe.Pointer, block_time_tic
 	}
 
 got:
-	if debugOSI {
-		println("osi: queue_recv got cmd=", cmd[0])
-	}
 	debugDumpCmd6("queue_recv", cmd)
 	debugDumpCmd0("queue_recv", cmd)
-	if debugOSI && cmd[0] == 7 {
-		println("osi: queue_recv cmd7 bytes=", cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7], "task=", tinygo_task_current())
-	}
-	if debugOSI {
-		println("osi: queue_recv out cmd=", cmd[0], "stack_left=", C.espradio_stack_remaining(), "task=", tinygo_task_current())
-	}
 	if cmd[0] == 6 && binary.LittleEndian.Uint32(cmd[4:8]) == 0 {
-		if debugOSI {
-			println("osi: queue_recv type=6 ptr=0, dropping to avoid pc:nil")
-		}
 		return 0
 	}
 	*(*[8]byte)(item) = cmd
 	C.espradio_ensure_osi_ptr()
-	if debugOSI {
-		println("osi: queue_recv qlen_after=", q.length())
-	}
-	runtime.Gosched()
 	return 1
 }
 
@@ -615,7 +601,7 @@ func espradio_queue_send(ptr unsafe.Pointer, item unsafe.Pointer, block_time_tic
 	}
 	cmd := *(*[8]byte)(item)
 	for i := 0; i < 100 && cmd[0] == 6 && binary.LittleEndian.Uint32(cmd[4:8]) == 0; i++ {
-		runtime.Gosched()
+		safeGosched()
 		cmd = *(*[8]byte)(item)
 	}
 	if debugOSI {
@@ -756,6 +742,6 @@ func espradio_event_group_wait_bits(ptr unsafe.Pointer, bitsToWaitFor uint32, cl
 			}
 			return snapshot
 		}
-		runtime.Gosched()
+		safeGosched()
 	}
 }

@@ -1,9 +1,6 @@
-//go:build esp32c3
-
 #include "sdkconfig.h"
 #include "include.h"
 #include "soc/interrupts.h"
-#include <stdarg.h>
 #include <string.h>
 
 #ifndef ESPRADIO_RADIO_DEBUG
@@ -218,4 +215,57 @@ __attribute__((weak)) void pp_printf(const char *format, ...) {
 #else
     (void)format;
 #endif
+}
+
+esp_err_t espradio_set_country_eu_manual(void) {
+    wifi_country_t c;
+    esp_err_t rc = esp_wifi_get_country(&c);
+    if (rc != ESP_OK) return rc;
+    c.cc[0] = 'E'; c.cc[1] = 'U'; c.cc[2] = ' ';
+    c.schan = 1; c.nchan = 13;
+    c.policy = WIFI_COUNTRY_POLICY_MANUAL;
+    return esp_wifi_set_country(&c);
+}
+
+esp_err_t espradio_sta_set_config(const char *ssid, int ssid_len,
+                                  const char *pwd, int pwd_len) {
+    wifi_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    if (ssid_len > 32) ssid_len = 32;
+    memcpy(cfg.sta.ssid, ssid, ssid_len);
+    if (pwd_len > 64) pwd_len = 64;
+    memcpy(cfg.sta.password, pwd, pwd_len);
+    if (pwd_len > 0)
+        cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    return esp_wifi_set_config(WIFI_IF_STA, &cfg);
+}
+
+static volatile uint32_t espradio_sniff_packets = 0;
+
+static void espradio_promisc_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
+    (void)buf; (void)type;
+    espradio_sniff_packets++;
+}
+
+esp_err_t espradio_sniff_begin(uint8_t channel) {
+    wifi_promiscuous_filter_t filter;
+    filter.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_CTRL | WIFI_PROMIS_FILTER_MASK_DATA;
+    espradio_sniff_packets = 0;
+    esp_err_t rc = esp_wifi_set_promiscuous(false);
+    (void)rc;
+    rc = esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+    if (rc != ESP_OK) return rc;
+    rc = esp_wifi_set_promiscuous_filter(&filter);
+    if (rc != ESP_OK) return rc;
+    rc = esp_wifi_set_promiscuous_rx_cb(espradio_promisc_rx_cb);
+    if (rc != ESP_OK) return rc;
+    return esp_wifi_set_promiscuous(true);
+}
+
+esp_err_t espradio_sniff_end(void) {
+    return esp_wifi_set_promiscuous(false);
+}
+
+uint32_t espradio_sniff_count(void) {
+    return espradio_sniff_packets;
 }

@@ -95,11 +95,6 @@ func main() {
 
 	ns.CloseSock(fd)
 	println("done!")
-
-	for {
-		time.Sleep(10 * time.Second)
-		println("alive")
-	}
 }
 
 func fmtIP(ip [4]byte) string {

@@ -23,13 +23,26 @@ uint32_t espradio_isr_ring_tail(void);
 void     espradio_isr_ring_advance_tail(void);
 void    *espradio_isr_ring_entry_queue(uint32_t idx);
 void    *espradio_isr_ring_entry_item(uint32_t idx);
+uint32_t espradio_isr_ring_drops(void);
 void espradio_set_task_stack_bottom(unsigned long bottom);
+void espradio_set_task_stack_top(unsigned long top);
 unsigned long espradio_stack_remaining(void);
+unsigned long espradio_stack_watermark(void);
+void espradio_alloc_stats(unsigned *out_alloc, unsigned *out_free);
 uint32_t espradio_wifi_boot_state(void);
-void espradio_test_pll(void);
+int espradio_esp_wifi_start(void);
+int rtc_get_reset_reason(int cpu_no);
+esp_err_t espradio_set_country_eu_manual(void);
+esp_err_t espradio_sta_set_config(const char *ssid, int ssid_len,
+                                  const char *pwd, int pwd_len);
+esp_err_t espradio_sniff_begin(uint8_t channel);
+esp_err_t espradio_sniff_end(void);
+uint32_t espradio_sniff_count(void);
+int espradio_start_ap_impl(const char *ssid, size_t ssid_len,
+    const char *password, size_t pwd_len, uint8_t channel, int auth_open);
+extern esp_err_t esp_wifi_connect_internal(void);
 
 /* ===== C → Go (//export из Go, резолвятся линкером) ===== */
-extern void espradio_event_loop_kick_go(void);
 __attribute__((noreturn))
 extern void espradio_panic(char *s);
 extern uint32_t espradio_log_timestamp(void);
@@ -44,7 +57,7 @@ extern void espradio_hal_reset_wifi_mac_go(void);
 extern int espradio_hal_read_mac_go(unsigned char *mac, unsigned int iftype);
 extern void espradio_on_wifi_event(int32_t eventID, void *data);
 
-/* ===== esp32c3/ → линкер (реализованы в esp32c3/*.c) ===== */
+/* ===== esp32c3/ → линкер (реализованы в esp32c3/\*.c) ===== */
 extern void espradio_phy_patch_romfuncs(void);
 extern void espradio_phy_hook_trace_set(uint32_t enabled);
 extern void espradio_pll_trace_set_enabled(uint32_t enabled);

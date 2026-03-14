@@ -1,5 +1,3 @@
-//go:build esp32c3
-
 /*
  * Functions not provided by TinyGo/picolibc runtime but required
  * by the WiFi blob and libwpa_supplicant.a dependency chain.
@@ -11,10 +9,6 @@
 #include <stdio.h>
 
 #include "include.h"
-
-#ifndef ESPRADIO_LIB_DEBUG
-#define ESPRADIO_LIB_DEBUG 0
-#endif
 
 extern uint64_t espradio_time_us_now(void);
 extern void espradio_task_delay(uint32_t ticks);
@@ -96,19 +90,6 @@ esp_err_t esp_wifi_disconnect(void) {
     return esp_wifi_disconnect_internal();
 }
 
-/* ---------- esp_event_post (called by WPA auth code) ---------- */
-
-extern int32_t espradio_event_post(const char* event_base, int32_t event_id,
-                                   void* event_data, size_t event_data_size,
-                                   uint32_t ticks_to_wait);
-
-esp_err_t esp_event_post(esp_event_base_t event_base, int32_t event_id,
-                         const void* event_data, size_t event_data_size,
-                         uint32_t ticks_to_wait) {
-    return (esp_err_t)espradio_event_post(event_base, event_id,
-                               (void*)event_data, event_data_size,
-                               ticks_to_wait);
-}
 
 /* ---------- strrchr: not in picolibc, not in libwpa_supplicant ---------- */
 
