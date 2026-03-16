@@ -1,5 +1,6 @@
 #include "include.h"
 #include "esp_coexist_internal.h"
+#include "rom.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,10 +27,6 @@ extern void espradio_hal_wifi_rtc_enable_iso_go(void);
 extern void espradio_hal_wifi_rtc_disable_iso_go(void);
 extern void espradio_hal_reset_wifi_mac_go(void);
 extern int espradio_hal_read_mac_go(uint8_t *mac, unsigned int iftype);
-extern void intr_matrix_set(uint32_t cpu_no, uint32_t model_num, uint32_t intr_num);
-extern void ets_isr_attach(uint32_t intr_num, void (*fn)(void *), void *arg);
-extern void ets_isr_mask(uint32_t mask);
-extern void ets_isr_unmask(uint32_t mask);
 
 extern wifi_osi_funcs_t espradio_osi_funcs;
 static void espradio_wifi_reset_mac(void);

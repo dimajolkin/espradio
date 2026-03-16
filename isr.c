@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
-
-extern void intr_matrix_set(uint32_t cpu_no, uint32_t model_num, uint32_t intr_num);
+#include "rom.h"
 
 /* ---- ISR fn/arg storage ---- */
 

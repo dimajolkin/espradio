@@ -1,6 +1,7 @@
 #include "sdkconfig.h"
 #include "include.h"
 #include "soc/interrupts.h"
+#include "rom.h"
 #include <string.h>
 
 #ifndef ESPRADIO_RADIO_DEBUG
@@ -12,15 +13,6 @@
 #else
 #define RADIO_DBG(...) ((void)0)
 #endif
-
-/* ROM printf/lock hooks, see esp32c3.rom.ld / esp32c3.rom.api.ld. */
-extern void ets_install_uart_printf(void);
-extern void ets_install_lock(void (*lock)(void), void (*unlock)(void));
-extern void ets_intr_lock(void);
-extern void ets_intr_unlock(void);
-extern void intr_matrix_set(uint32_t cpu_no, uint32_t model_num, uint32_t intr_num);
-extern void ets_isr_attach(uint32_t intr_num, void (*fn)(void *), void *arg);
-extern void ets_isr_unmask(uint32_t mask);
 
 /* phy_get_romfunc_addr() from libphy.a would set g_phyFuns via ROM; in our build it leads to
  * an error/crash, so we never call it and always use the stub table below. */
