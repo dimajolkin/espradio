@@ -109,12 +109,12 @@ void wifi_bt_common_module_disable(void) {
         }
     }
 }
-extern void ant_dft_cfg(uint32_t ant) __attribute__((weak));
-extern void ant_tx_cfg(uint32_t tx_ant) __attribute__((weak));
-extern void ant_rx_cfg(uint32_t rx_auto, uint32_t rx_ant0, uint32_t rx_ant1) __attribute__((weak));
-extern void *heap_caps_malloc(size_t size, uint32_t caps) __attribute__((weak));
-extern void phy_param_track_tot(uint32_t wifi_track_pll, uint32_t ble_154_track_pll) __attribute__((weak));
-extern uint8_t phy_dig_reg_backup(bool backup_en, uint32_t *mem_addr) __attribute__((weak));
+extern void ant_dft_cfg(uint32_t ant);
+extern void ant_tx_cfg(uint32_t tx_ant);
+extern void ant_rx_cfg(uint32_t rx_auto, uint32_t rx_ant0, uint32_t rx_ant1);
+extern void phy_param_track_tot(uint32_t wifi_track_pll, uint32_t ble_154_track_pll);
+extern uint8_t phy_dig_reg_backup(bool backup_en, uint32_t *mem_addr);
+void *heap_caps_malloc(size_t size, uint32_t caps);
 extern void espradio_hal_init_clocks_go(void);
 extern void espradio_hal_disable_clocks_go(void);
 extern int rtc_get_reset_reason(int cpu_no);
@@ -139,35 +139,6 @@ static esp_phy_ant_config_t s_phy_ant_config_local = {
     .enabled_ant0 = 0,
     .enabled_ant1 = 1,
 };
-
-static void espradio_phy_debug_dump(const esp_phy_init_data_t *init_data,
-                                    esp_phy_calibration_data_t *cal_data,
-                                    esp_phy_calibration_mode_t cal_mode);
-
-static int espradio_register_chipv7_phy_logged(const esp_phy_init_data_t *init_data,
-                                               esp_phy_calibration_data_t *cal_data,
-                                               esp_phy_calibration_mode_t cal_mode) {
-    int rr = rtc_get_reset_reason(0);
-    uint8_t mac0 = 0;
-    uint8_t mac1 = 0;
-    if (cal_data) {
-        mac0 = cal_data->mac[0];
-        mac1 = cal_data->mac[1];
-    }
-    PHY_SHIM_DBG("espradio: register_chipv7_phy call begin init=%p cal=%p mode=%u reset_reason=%d mac=%02x:%02x\n",
-                 (void *)init_data, (void *)cal_data, (unsigned)cal_mode, rr, (unsigned)mac0, (unsigned)mac1);
-
-    int rc = register_chipv7_phy(init_data, cal_data, cal_mode);
-    mac0 = 0;
-    mac1 = 0;
-    if (cal_data) {
-        mac0 = cal_data->mac[0];
-        mac1 = cal_data->mac[1];
-    }
-    PHY_SHIM_DBG("espradio: register_chipv7_phy call done rc=%d mac=%02x:%02x\n",
-                 rc, (unsigned)mac0, (unsigned)mac1);
-    return rc;
-}
 
 void esp_phy_load_cal_and_init(void) {
     const esp_phy_init_data_t *init_data = esp_phy_get_init_data();
@@ -197,16 +168,8 @@ void esp_phy_load_cal_and_init(void) {
     if (nvs_rc != ESP_OK && !force_cal_none) {
         cal_mode = PHY_RF_CAL_FULL;
     }
-    int mac_rc = espradio_hal_read_mac_go((unsigned char *)cal_data->mac, 0);
-    PHY_SHIM_DBG("espradio: cal_data mac rc=%d mac=%02x:%02x:%02x:%02x:%02x:%02x nvs_rc=%d cal_mode=%u\n",
-                 mac_rc,
-                 (unsigned)cal_data->mac[0], (unsigned)cal_data->mac[1],
-                 (unsigned)cal_data->mac[2], (unsigned)cal_data->mac[3],
-                 (unsigned)cal_data->mac[4], (unsigned)cal_data->mac[5],
-                 (int)nvs_rc, (unsigned)cal_mode);
-    espradio_phy_debug_dump(init_data, cal_data, cal_mode);
-    int rc = espradio_register_chipv7_phy_logged(init_data, cal_data, cal_mode);
-    PHY_SHIM_DBG("espradio: register_chipv7_phy rc=%d\n", rc);
+    (void)espradio_hal_read_mac_go((unsigned char *)cal_data->mac, 0);
+    int rc = register_chipv7_phy(init_data, cal_data, cal_mode);
     if (cal_mode != PHY_RF_CAL_NONE && (nvs_rc != ESP_OK || rc == 1)) {
         esp_phy_store_cal_data_to_nvs(cal_data);
     }
@@ -227,11 +190,11 @@ static void espradio_phy_unlock(void) {
     __sync_lock_release(&s_phy_spin_lock);
 }
 
-__attribute__((weak)) void esp_phy_common_clock_enable(void) {
+void esp_phy_common_clock_enable(void) {
     wifi_bt_common_module_enable();
 }
 
-__attribute__((weak)) void esp_phy_common_clock_disable(void) {
+void esp_phy_common_clock_disable(void) {
     wifi_bt_common_module_disable();
 }
 
@@ -244,11 +207,7 @@ static void phy_track_pll_internal_local(void) {
         return;
     }
     s_wifi_prev_timestamp_local = esp_timer_get_time();
-    if (phy_param_track_tot != NULL) {
-        phy_param_track_tot(1u, 0u);
-    } else {
-        rom_phy_track_pll_cap();
-    }
+    phy_param_track_tot(1u, 0u);
 }
 
 static void phy_track_pll_timer_callback_local(void *arg) {
@@ -258,7 +217,7 @@ static void phy_track_pll_timer_callback_local(void *arg) {
     espradio_phy_unlock();
 }
 
-__attribute__((weak)) void phy_track_pll_init(void) {
+void phy_track_pll_init(void) {
     esp_timer_create_args_t args = {
         .callback = phy_track_pll_timer_callback_local,
         .arg = NULL,
@@ -272,7 +231,7 @@ __attribute__((weak)) void phy_track_pll_init(void) {
     }
 }
 
-__attribute__((weak)) void phy_track_pll_deinit(void) {
+void phy_track_pll_deinit(void) {
     if (s_phy_track_pll_timer != NULL) {
         (void)esp_timer_stop(s_phy_track_pll_timer);
         (void)esp_timer_delete(s_phy_track_pll_timer);
@@ -281,7 +240,7 @@ __attribute__((weak)) void phy_track_pll_deinit(void) {
     s_phy_track_pll_started_local = 0u;
 }
 
-__attribute__((weak)) void phy_track_pll(void) {
+void phy_track_pll(void) {
     if ((s_phy_track_pll_started_local != 0u) && (phy_enabled_modem_contains_local(1u) != 0u)) {
         int64_t now = esp_timer_get_time();
         if ((now - s_wifi_prev_timestamp_local) > 1000000LL) {
@@ -290,16 +249,15 @@ __attribute__((weak)) void phy_track_pll(void) {
     }
 }
 
-__attribute__((weak)) void phy_digital_regs_load(void) {
+void phy_digital_regs_load(void) {
     if ((s_phy_is_digital_regs_stored_local != 0u) &&
-        (s_phy_digital_regs_mem_ptr != NULL) &&
-        (phy_dig_reg_backup != NULL)) {
+        (s_phy_digital_regs_mem_ptr != NULL)) {
         (void)phy_dig_reg_backup(false, s_phy_digital_regs_mem_ptr);
     }
 }
 
-__attribute__((weak)) void phy_digital_regs_store(void) {
-    if ((s_phy_digital_regs_mem_ptr != NULL) && (phy_dig_reg_backup != NULL)) {
+void phy_digital_regs_store(void) {
+    if (s_phy_digital_regs_mem_ptr != NULL) {
         (void)phy_dig_reg_backup(true, s_phy_digital_regs_mem_ptr);
         s_phy_is_digital_regs_stored_local = 1u;
     } else if (s_phy_dig_reg_backup_warned_once == 0u) {
@@ -308,25 +266,31 @@ __attribute__((weak)) void phy_digital_regs_store(void) {
     }
 }
 
-__attribute__((weak)) void phy_set_modem_flag(uint32_t modem) {
+void phy_set_modem_flag(uint32_t modem) {
     s_phy_modem_flags_local = (uint16_t)(s_phy_modem_flags_local | (uint16_t)modem);
 }
 
-__attribute__((weak)) void phy_clr_modem_flag(uint32_t modem) {
+void phy_clr_modem_flag(uint32_t modem) {
     s_phy_modem_flags_local = (uint16_t)(s_phy_modem_flags_local & (uint16_t)(~(uint16_t)modem));
 }
 
-__attribute__((weak)) uint32_t phy_get_modem_flag(void) {
+uint32_t phy_get_modem_flag(void) {
     return (uint32_t)s_phy_modem_flags_local;
 }
 
 void esp_phy_modem_init(void) {
     espradio_phy_lock();
     s_phy_modem_init_ref = (uint8_t)(s_phy_modem_init_ref + 1u);
-    if (s_phy_digital_regs_mem_ptr == NULL && heap_caps_malloc != NULL) {
+    if (s_phy_digital_regs_mem_ptr == NULL) {
         s_phy_digital_regs_mem_ptr = (uint32_t *)heap_caps_malloc(0x54u, 0x808u);
     }
     espradio_phy_unlock();
+}
+
+void *heap_caps_malloc(size_t size, uint32_t caps) {
+    (void)caps;
+    void *espradio_arena_alloc(size_t);
+    return espradio_arena_alloc(size);
 }
 
 void esp_phy_modem_deinit(void) {
@@ -345,14 +309,11 @@ void esp_phy_modem_deinit(void) {
     espradio_phy_unlock();
 }
 
-__attribute__((weak)) bool phy_ant_need_update(void) {
+bool phy_ant_need_update(void) {
     return s_phy_ant_need_update_local != 0u;
 }
 
-__attribute__((weak)) void phy_ant_update(void) {
-    if ((ant_dft_cfg == NULL) || (ant_tx_cfg == NULL) || (ant_rx_cfg == NULL)) {
-        return;
-    }
+void phy_ant_update(void) {
     uint32_t ant0 = (uint32_t)s_phy_ant_config_local.enabled_ant0 & 0x0fu;
     uint32_t ant1 = (uint32_t)s_phy_ant_config_local.enabled_ant1 & 0x0fu;
     uint32_t rx_ant0 = ant0;
@@ -382,35 +343,8 @@ __attribute__((weak)) void phy_ant_update(void) {
     ant_rx_cfg(rx_auto, rx_ant0, rx_ant1);
 }
 
-__attribute__((weak)) void phy_ant_clr_update_flag(void) {
+void phy_ant_clr_update_flag(void) {
     s_phy_ant_need_update_local = 0u;
-}
-
-static void espradio_phy_debug_dump(const esp_phy_init_data_t *init_data,
-                                    esp_phy_calibration_data_t *cal_data,
-                                    esp_phy_calibration_mode_t cal_mode) {
-#if ESPRADIO_PHY_SHIM_DEBUG
-    if (s_phy_debug_once != 0u) {
-        return;
-    }
-    s_phy_debug_once = 1u;
-    const char *ver = get_phy_version_str();
-    uint32_t *tbl = (uint32_t *)g_phyFuns;
-    printf("espradio: phy_debug ver=%s g_phyFuns=%p init=%p cal=%p mode=%u\n",
-           ver ? ver : "?", g_phyFuns, (void *)init_data, (void *)cal_data, (unsigned)cal_mode);
-    if (tbl) {
-        printf("espradio: phy_debug tbl[0x1ac]=%p tbl[0x228]=%p tbl[0x1b4]=%p tbl[0x1b8]=%p tbl[0x1bc]=%p\n",
-               (void *)(uintptr_t)tbl[0x1acu / 4u],
-               (void *)(uintptr_t)tbl[0x228u / 4u],
-               (void *)(uintptr_t)tbl[0x1b4u / 4u],
-               (void *)(uintptr_t)tbl[0x1b8u / 4u],
-               (void *)(uintptr_t)tbl[0x1bcu / 4u]);
-    }
-#else
-    (void)init_data;
-    (void)cal_data;
-    (void)cal_mode;
-#endif
 }
 
 void esp_phy_enable(uint32_t modem) {
