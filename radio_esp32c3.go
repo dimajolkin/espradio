@@ -4,8 +4,6 @@ package espradio
 
 /*
 #include "include.h"
-unsigned long espradio_stack_remaining(void);
-unsigned long espradio_stack_watermark(void);
 int espradio_fire_one_pending_timer(void);
 void espradio_ensure_osi_ptr(void);
 */
@@ -556,7 +554,7 @@ func espradio_queue_recv(ptr unsafe.Pointer, item unsafe.Pointer, block_time_tic
 	}
 
 	if debugOSI {
-		println("osi: queue_recv in ptr=", ptr, "q=", q, "qlen=", q.length(), "stack_left=", C.espradio_stack_remaining(), "task=", tinygo_task_current())
+		println("osi: queue_recv in ptr=", ptr, "q=", q, "qlen=", q.length(), "task=", tinygo_task_current())
 	}
 
 	var cmd [8]byte

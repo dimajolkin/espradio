@@ -11,40 +11,7 @@
 
 #include <stdint.h>
 
-static volatile uintptr_t g_task_stack_bottom;
-static volatile uintptr_t g_task_stack_top;
-static volatile uintptr_t g_stack_watermark;
 #define ESPRADIO_PHY_MODEM_WIFI 1u
-
-void espradio_set_task_stack_bottom(uintptr_t bottom) {
-    g_task_stack_bottom = bottom;
-}
-
-void espradio_set_task_stack_top(uintptr_t top) {
-    g_task_stack_top = top;
-    g_stack_watermark = top;
-}
-
-static inline void espradio_stack_check(void) {
-    uintptr_t sp;
-    __asm__ volatile ("mv %0, sp" : "=r"(sp));
-    if (sp < g_stack_watermark) {
-        g_stack_watermark = sp;
-    }
-}
-
-unsigned long espradio_stack_remaining(void) {
-    if (g_task_stack_bottom == 0) return 0;
-    uintptr_t sp;
-    __asm__ volatile ("mv %0, sp" : "=r"(sp));
-    if (sp <= g_task_stack_bottom) return 0;
-    return (unsigned long)(sp - g_task_stack_bottom);
-}
-
-unsigned long espradio_stack_watermark(void) {
-    if (g_task_stack_top == 0 || g_stack_watermark == 0) return 0;
-    return (unsigned long)(g_task_stack_top - g_stack_watermark);
-}
 
 __attribute__((noreturn))
 void espradio_panic(char *s);
@@ -68,26 +35,10 @@ extern wifi_osi_funcs_t espradio_osi_funcs;
 static void espradio_wifi_reset_mac(void);
 void espradio_timer_pending_reset(void);
 
-/* Подготовка памяти под Wi‑Fi: ROM_Boot_Cache_Init() предназначен для самого старта;
- * вызов из приложения переконфигурирует кэш и даёт Illegal Instruction сразу после.
- * Оставляем no-op; при необходимости искать другой способ (например, только Cache_MMU_Init с корректными аргументами). */
-#define G_OSI_FUNCS_P_ADDR 0x3fcdf954
-
-_Static_assert(offsetof(wifi_osi_funcs_t, _coex_pti_get) == 0x1a8,
-               "_coex_pti_get must be at offset 0x1a8 for blob compatibility");
-#define G_WDEV_LAST_DESC_RESET_PTR_ADDR 0x3ff1ee40
-static uint8_t s_wdev_last_desc_reset_byte;
-
 wifi_osi_funcs_t *g_osi_funcs_p;
-
-void espradio_wdev_last_desc_reset_prepare(void) {
-    *(volatile uint32_t *)G_WDEV_LAST_DESC_RESET_PTR_ADDR = (uint32_t)&s_wdev_last_desc_reset_byte;
-    s_wdev_last_desc_reset_byte = 0;
-}
 
 void espradio_prepare_memory_for_wifi(void) {
     g_osi_funcs_p = &espradio_osi_funcs;
-    *(volatile uint32_t *)G_OSI_FUNCS_P_ADDR = (uint32_t)&espradio_osi_funcs;
 #if ESPRADIO_OSI_DEBUG
     printf("osi: prepare_memory_for_wifi (no-op wdev_last_desc_reset_ptr)\n");
 #endif
@@ -95,7 +46,6 @@ void espradio_prepare_memory_for_wifi(void) {
 
 void espradio_ensure_osi_ptr(void) {
     g_osi_funcs_p = &espradio_osi_funcs;
-    *(volatile uint32_t *)G_OSI_FUNCS_P_ADDR = (uint32_t)&espradio_osi_funcs;
     memcpy(&g_wifi_osi_funcs, &espradio_osi_funcs, sizeof(wifi_osi_funcs_t));
 #if ESPRADIO_OSI_DEBUG
     printf("osi: ensure_osi_ptr\n");
@@ -106,7 +56,6 @@ esp_err_t espradio_esp_wifi_start(void) {
 #if ESPRADIO_OSI_DEBUG
     printf("osi: esp_wifi_start (write table then call blob)\n");
 #endif
-    *(volatile uint32_t *)G_OSI_FUNCS_P_ADDR = (uint32_t)&espradio_osi_funcs;
     g_osi_funcs_p = &espradio_osi_funcs;
     espradio_timer_pending_reset();
     return esp_wifi_start();
@@ -194,12 +143,10 @@ static void espradio_queue_delete(void *queue) {
 int32_t espradio_queue_send(void *queue, void *item, uint32_t block_time_tick);
 
 static int32_t espradio_queue_send_to_back(void *queue, void *item, uint32_t block_time_tick) {
-    espradio_stack_check();
     return espradio_queue_send(queue, item, block_time_tick);
 }
 
 static int32_t espradio_queue_send_to_front(void *queue, void *item, uint32_t block_time_tick) {
-    espradio_stack_check();
     return espradio_queue_send(queue, item, block_time_tick);
 }
 
@@ -241,7 +188,7 @@ static uint32_t espradio_event_group_wait_bits(void *event, uint32_t bits_to_wai
 
 void espradio_run_task(void *task_func, void *task_handle) {
 #if ESPRADIO_OSI_DEBUG
-    printf("osi: run_task fn=%p stack_left=%lu\n", (void *)task_func, (unsigned long)espradio_stack_remaining());
+    printf("osi: run_task fn=%p\n", (void *)task_func);
 #endif
     void (*fn)(void *task_handle) = task_func;
     fn(task_handle);
@@ -382,7 +329,6 @@ esp_err_t esp_event_handler_register(esp_event_base_t event_base, int32_t event_
 }
 
 void espradio_event_loop_run_once(void) {
-    espradio_stack_check();
     if (!s_event_loop_ready) return;
 #if ESPRADIO_OSI_DEBUG
     static uint32_t s_event_loop_idle_log_throttle = 0;
@@ -471,14 +417,13 @@ esp_err_t esp_event_post(esp_event_base_t event_base, int32_t event_id, const vo
             scan_id = b5;
         }
     }
-    printf("osi: event_post base=%s id=%ld size=%zu data=%p bytes=[%u,%u,%u,%u,%u,%u,%u,%u] stack_left=%lu\n",
+    printf("osi: event_post base=%s id=%ld size=%zu data=%p bytes=[%u,%u,%u,%u,%u,%u,%u,%u]\n",
            event_base ? event_base : "(null)",
            (long)event_id,
            (size_t)event_data_size,
            event_data,
            (unsigned)b0, (unsigned)b1, (unsigned)b2, (unsigned)b3,
-           (unsigned)b4, (unsigned)b5, (unsigned)b6, (unsigned)b7,
-           (unsigned long)espradio_stack_remaining());
+           (unsigned)b4, (unsigned)b5, (unsigned)b6, (unsigned)b7);
     if (event_base && strcmp(event_base, s_wifi_event_base) == 0 && event_id == 1 && event_data_size >= 6) {
         printf("osi: event_post scan_done status=%lu number=%u scan_id=%u\n",
                (unsigned long)scan_status, (unsigned)scan_number, (unsigned)scan_id);
@@ -925,7 +870,6 @@ int espradio_timer_poll_due(int max_fire) {
 /* Stub: reset WiFi MAC. Блоб вызывает по osi+244 между coex_wifi_request и coex_wifi_release;
  * выставляем g_wdev_last_desc_reset_ptr чтобы следующий за release *ptr=1 не портил память. */
 static void espradio_wifi_reset_mac(void) {
-    espradio_wdev_last_desc_reset_prepare();
     espradio_hal_reset_wifi_mac_go();
 #if ESPRADIO_OSI_DEBUG
     printf("osi: wifi_reset_mac\n");
@@ -1104,10 +1048,9 @@ static void * espradio_zalloc_internal(size_t size) {
 }
 
 static void * espradio_wifi_malloc(size_t size) {
-    *(volatile uint32_t *)G_OSI_FUNCS_P_ADDR = (uint32_t)&espradio_osi_funcs;
     espradio_alloc_count++;
 #if ESPRADIO_OSI_DEBUG
-    printf("osi: wifi_malloc %zu stack_left=%lu\n", size, (unsigned long)espradio_stack_remaining());
+    printf("osi: wifi_malloc %zu\n", size);
 #endif
     return espradio_arena_alloc(size);
 }
@@ -1155,8 +1098,6 @@ void vPortFree(void *p) {
 void * espradio_wifi_create_queue(int queue_len, int item_size);
 
 void espradio_wifi_delete_queue(void * queue);
-
-extern void espradio_wdev_last_desc_reset_prepare(void);
 extern int coex_schm_flexible_period_set(uint8_t period);
 extern uint8_t coex_schm_flexible_period_get(void);
 
@@ -1171,7 +1112,6 @@ static void espradio_coex_condition_set(uint32_t type, bool dissatisfy) {
 }
 
 static int espradio_coex_wifi_release(uint32_t event) {
-    espradio_wdev_last_desc_reset_prepare();
     return coex_wifi_release(event);
 }
 

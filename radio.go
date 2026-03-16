@@ -379,12 +379,6 @@ const taskStackSize = 8192
 func espradio_task_create_pinned_to_core(task_func unsafe.Pointer, name *C.char, stack_depth uint32, param unsafe.Pointer, prio uint32, task_handle *unsafe.Pointer, core_id uint32) int32 {
 	ch := make(chan struct{}, 1)
 	go func() {
-		var anchor byte
-		top := uintptr(unsafe.Pointer(&anchor))
-		bottom := top - taskStackSize
-		C.espradio_set_task_stack_bottom(C.ulong(bottom))
-		C.espradio_set_task_stack_top(C.ulong(top))
-		println("wifi_task: stack top=", top, "bottom=", bottom, "size=", taskStackSize)
 		*task_handle = tinygo_task_current()
 		close(ch)
 		espradio_run_task(task_func, param)
