@@ -4,29 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "esp_phy_init.h"
+#include "../blobs/include/include.h"
 #include "esp_phy.h"
-#include "esp_timer.h"
 #include "phy_init_data_idf.h"
 
-#ifndef ESPRADIO_PHY_STUB_TEST
-#define ESPRADIO_PHY_STUB_TEST 0
-#endif
-
-#ifndef ESPRADIO_PHY_USE_PROBE
-#define ESPRADIO_PHY_USE_PROBE 0
-#endif
-
-#ifndef ESPRADIO_PHY_SHIM_DEBUG
-#define ESPRADIO_PHY_SHIM_DEBUG 0
-#endif
-
-#if ESPRADIO_PHY_SHIM_DEBUG
-#define PHY_SHIM_DBG(...) printf(__VA_ARGS__)
-#else
-#define PHY_SHIM_DBG(...) ((void)0)
-#endif
-
+/* no debug logging in this adapter */
+#define PHY_ADAPTER_DBG(...) ((void)0)
 
 extern void phy_wifi_enable_set(uint8_t enable);
 extern void *g_phyFuns;
@@ -62,85 +45,28 @@ __attribute__((weak)) esp_err_t esp_deep_sleep_register_phy_hook(void (*hook)(vo
     return ESP_OK;
 }
 
-#define SYSCON_CLK_EN_REG     (*(volatile uint32_t *)0x60026014)
-#define SYSCON_WIFI_RST_EN    (*(volatile uint32_t *)0x60026018)
-#define RTC_CNTL_DIG_PWC      (*(volatile uint32_t *)0x60008088)
-#define RTC_CNTL_DIG_ISO      (*(volatile uint32_t *)0x6000808c)
-#define WIFI_BT_CLK_EN_MASK   0x0078078fU
-#define WIFI_BT_CLK_DIS_MASK  0xff87f870U
-#define MODEM_RESET_WHEN_PU   (0x01U | 0x02U | 0x04U | 0x08U | 0x10U | (1U<<9) | (1U<<11) | (1U<<13))
-#define RTC_WIFI_FORCE_PD     (1U << 17)
-#define RTC_WIFI_FORCE_ISO    (1U << 28)
+extern void espradio_hal_init_clocks_go(void);
+extern void espradio_hal_disable_clocks_go(void);
 
-static uint8_t s_wifi_bt_common_ref;
-static uint32_t s_wifi_bt_pd_ref;
 static volatile uint32_t s_wifi_bt_pd_lock;
 
-/* Simple busy-wait delay that does not depend on IDF timers.
- * Used in early PHY / power-domain bring-up paths.
+/* High-level power domain control used by wifi driver.
+ * The actual register-level work is delegated to Go HAL,
+ * so this C adapter remains mostly platform-agnostic.
  */
-static void esp_rom_delay_us(uint32_t us) {
-    for (volatile uint32_t i = 0; i < us * 20; i++) {
-        (void)i;
-    }
-}
-
-void wifi_bt_common_module_enable(void);
-void wifi_bt_common_module_disable(void);
-
-/* Reference-counted power-up of the WiFi/BT digital power domain. */
 void esp_wifi_bt_power_domain_on(void) {
-    PHY_SHIM_DBG("espradio: esp_wifi_bt_power_domain_on\n");
+    PHY_ADAPTER_DBG("espradio: esp_wifi_bt_power_domain_on\n");
     while (__sync_lock_test_and_set(&s_wifi_bt_pd_lock, 1U)) {}
-    uint32_t prev = s_wifi_bt_pd_ref;
-    s_wifi_bt_pd_ref++;
-    if (prev == 0U) {
-        RTC_CNTL_DIG_PWC &= ~RTC_WIFI_FORCE_PD;
-        esp_rom_delay_us(10);
-        wifi_bt_common_module_enable();
-        SYSCON_WIFI_RST_EN |= MODEM_RESET_WHEN_PU;
-        SYSCON_WIFI_RST_EN &= ~MODEM_RESET_WHEN_PU;
-        RTC_CNTL_DIG_ISO &= ~RTC_WIFI_FORCE_ISO;
-        wifi_bt_common_module_disable();
-    }
+    espradio_hal_init_clocks_go();
     __sync_lock_release(&s_wifi_bt_pd_lock);
 }
 
-/* Reference-counted power-down of the WiFi/BT digital power domain. */
 void esp_wifi_bt_power_domain_off(void) {
     while (__sync_lock_test_and_set(&s_wifi_bt_pd_lock, 1U)) {}
-    if (s_wifi_bt_pd_ref > 0U) {
-        s_wifi_bt_pd_ref--;
-        if (s_wifi_bt_pd_ref == 0U) {
-            RTC_CNTL_DIG_ISO |= RTC_WIFI_FORCE_ISO;
-            RTC_CNTL_DIG_PWC |= RTC_WIFI_FORCE_PD;
-        }
-    }
+    espradio_hal_disable_clocks_go();
     __sync_lock_release(&s_wifi_bt_pd_lock);
 }
 
-/* Enable shared WiFi/BT clocks; internal refcount keeps them on
- * while at least one user is active.
- */
-void wifi_bt_common_module_enable(void) {
-    if (s_wifi_bt_common_ref == 0U) {
-        SYSCON_CLK_EN_REG |= WIFI_BT_CLK_EN_MASK;
-    }
-    s_wifi_bt_common_ref++;
-}
-
-/* Disable shared WiFi/BT clocks when the last user releases them. */
-void wifi_bt_common_module_disable(void) {
-    if (s_wifi_bt_common_ref > 0U) {
-        s_wifi_bt_common_ref--;
-        if (s_wifi_bt_common_ref == 0U) {
-            SYSCON_CLK_EN_REG &= WIFI_BT_CLK_DIS_MASK;
-        }
-    }
-}
-extern void ant_dft_cfg(uint32_t ant);
-extern void ant_tx_cfg(uint32_t tx_ant);
-extern void ant_rx_cfg(uint32_t rx_auto, uint32_t rx_ant0, uint32_t rx_ant1);
 extern void phy_param_track_tot(uint32_t wifi_track_pll, uint32_t ble_154_track_pll);
 extern uint8_t phy_dig_reg_backup(bool backup_en, uint32_t *mem_addr);
 void *heap_caps_malloc(size_t size, uint32_t caps);
@@ -189,8 +115,8 @@ void esp_phy_load_cal_and_init(void) {
     phy_init_param_set(1u);
     bool bbpll_usb = true;
     phy_bbpll_en_usb(bbpll_usb);
-    PHY_SHIM_DBG("espradio: phy_bbpll_en_usb=%u reset_reason=%d\n",
-                 (unsigned)(bbpll_usb ? 1u : 0u), rr);
+    PHY_ADAPTER_DBG("espradio: phy_bbpll_en_usb=%u reset_reason=%d\n",
+                    (unsigned)(bbpll_usb ? 1u : 0u), rr);
     bool force_cal_none = (rr == 21);
     esp_phy_calibration_mode_t cal_mode = force_cal_none
                                               ? PHY_RF_CAL_NONE
@@ -213,7 +139,7 @@ void esp_phy_load_cal_and_init(void) {
     }
 }
 
-/* Lightweight spinlock guarding PHY shim state across threads/ISRs. */
+/* Lightweight spinlock guarding PHY adapter state across threads/ISRs. */
 static void espradio_phy_lock(void) {
     while (__sync_lock_test_and_set(&s_phy_spin_lock, 1u)) {
     }
@@ -223,14 +149,16 @@ static void espradio_phy_unlock(void) {
     __sync_lock_release(&s_phy_spin_lock);
 }
 
-/* Adapter used by IDF PHY to enable shared clocks via espradio shim. */
+/* Adapter used by IDF PHY to enable shared clocks via espradio adapter.
+ * In this port we keep the clocks/power domain managed by the Go HAL,
+ * so these functions are effectively no-ops.
+ */
 void esp_phy_common_clock_enable(void) {
-    wifi_bt_common_module_enable();
+    (void)0;
 }
 
-/* Adapter used by IDF PHY to disable shared clocks via espradio shim. */
 void esp_phy_common_clock_disable(void) {
-    wifi_bt_common_module_disable();
+    (void)0;
 }
 
 static uint32_t phy_enabled_modem_contains_local(uint32_t modem) {
@@ -302,7 +230,7 @@ void phy_digital_regs_store(void) {
         s_phy_is_digital_regs_stored_local = 1u;
     } else if (s_phy_dig_reg_backup_warned_once == 0u) {
         s_phy_dig_reg_backup_warned_once = 1u;
-        PHY_SHIM_DBG("espradio: phy_dig_reg_backup missing\n");
+        PHY_ADAPTER_DBG("espradio: phy_dig_reg_backup missing\n");
     }
 }
 
@@ -386,9 +314,9 @@ void phy_ant_update(void) {
         tx_ant0 = ant0;
     }
 
-    ant_dft_cfg((uint32_t)(s_phy_ant_config_local.rx_ant_default == ESP_PHY_ANT_ANT1));
-    ant_tx_cfg(tx_ant0);
-    ant_rx_cfg(rx_auto, rx_ant0, rx_ant1);
+    ant_dft_cfg(s_phy_ant_config_local.rx_ant_default == ESP_PHY_ANT_ANT1);
+    ant_tx_cfg((uint8_t)tx_ant0);
+    ant_rx_cfg(rx_auto != 0u, (uint8_t)rx_ant0, (uint8_t)rx_ant1);
 }
 
 /* Mark antenna configuration as up-to-date. */
@@ -397,20 +325,20 @@ void phy_ant_clr_update_flag(void) {
 }
 
 /* High-level entry point used by IDF to enable PHY for a modem.
- * Handles clocks, calibration, PLL tracking and antenna configuration.
+ * Handles calibration, PLL tracking and antenna configuration.
+ * Power/clock domain is controlled via esp_wifi_bt_power_domain_on().
  */
 void esp_phy_enable(uint32_t modem) {
     espradio_phy_lock();
     uint32_t modem_flags = phy_get_modem_flag();
-    PHY_SHIM_DBG("espradio: esp_phy_enable modem=%lu flags=%lu calibrated=%u\n",
-                 (unsigned long)modem, (unsigned long)modem_flags, (unsigned)s_is_phy_calibrated);
+    PHY_ADAPTER_DBG("espradio: esp_phy_enable modem=%lu flags=%lu calibrated=%u\n",
+                    (unsigned long)modem, (unsigned long)modem_flags, (unsigned)s_is_phy_calibrated);
     if (modem_flags == 0u) {
-        esp_phy_common_clock_enable();
         if (s_is_phy_calibrated == 0u) {
             esp_phy_load_cal_and_init();
             s_is_phy_calibrated = 1u;
         } else {
-            PHY_SHIM_DBG("espradio: esp_phy_enable phy_wakeup_init\n");
+            PHY_ADAPTER_DBG("espradio: esp_phy_enable phy_wakeup_init\n");
             phy_wakeup_init();
             phy_digital_regs_load();
         }
@@ -432,17 +360,11 @@ void esp_phy_disable(uint32_t modem) {
     espradio_phy_lock();
     phy_clr_modem_flag(modem);
     if (phy_get_modem_flag() == 0u) {
-#if ESPRADIO_PHY_STUB_TEST
-        printf("espradio: esp_phy_disable STUB begin\n");
-        phy_wifi_enable_set(0);
-        printf("espradio: esp_phy_disable STUB done\n");
-#else
         phy_track_pll_deinit();
         phy_digital_regs_store();
         phy_close_rf();
         phy_xpd_tsens();
-        esp_phy_common_clock_disable();
-#endif
     }
     espradio_phy_unlock();
 }
+
