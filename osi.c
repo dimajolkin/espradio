@@ -1,5 +1,4 @@
 #include "esp_coexist_internal.h"
-#include "rom.h"
 #include "espradio.h"
 #include <stdarg.h>
 #include <stdio.h>

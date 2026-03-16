@@ -1,7 +1,6 @@
 #include "sdkconfig.h"
-#include "include.h"
+#include "espradio.h"
 #include "soc/interrupts.h"
-#include "rom.h"
 #include <string.h>
 
 #ifndef ESPRADIO_RADIO_DEBUG

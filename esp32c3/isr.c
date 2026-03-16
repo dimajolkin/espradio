@@ -1,7 +1,7 @@
 //go:build esp32c3
 
 #include <stdint.h>
-#include "rom.h"
+#include "espradio.h"
 
 /* ---- Interrupt controller registers (ESP32-C3) ---- */
 

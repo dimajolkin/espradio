@@ -66,3 +66,15 @@ extern void espradio_on_wifi_event(int32_t eventID, void *data);
 /* ===== esp32c3/ → линкер (реализованы в esp32c3/\*.c) ===== */
 extern void esp_phy_enable(uint32_t modem);
 extern void esp_phy_disable(uint32_t modem);
+
+// Interrupt controller / ISR helpers.
+void intr_matrix_set(uint32_t cpu_no, uint32_t model_num, uint32_t intr_num);
+void ets_isr_attach(uint32_t intr_num, void (*fn)(void *), void *arg);
+void ets_isr_mask(uint32_t mask);
+void ets_isr_unmask(uint32_t mask);
+
+// Global ROM lock / printf hooks.
+void ets_install_uart_printf(void);
+void ets_install_lock(void (*lock)(void), void (*unlock)(void));
+void ets_intr_lock(void);
+void ets_intr_unlock(void);

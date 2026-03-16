@@ -6,7 +6,6 @@
 #include <string.h>
 #include "../blobs/include/include.h"
 #include "esp_phy.h"
-#include "phy_init_data_idf.h"
 
 /* no debug logging in this adapter */
 #define PHY_ADAPTER_DBG(...) ((void)0)
@@ -94,6 +93,13 @@ static esp_phy_ant_config_t s_phy_ant_config_local = {
     .enabled_ant0 = 0,
     .enabled_ant1 = 1,
 };
+
+/* Static PHY init data blob.
+ * NOTE: this is a zeroed placeholder; for production use, this should be
+ * populated with real PHY init parameters extracted from the matching
+ * ESP-IDF/esp-wifi release (e.g. from phy_init_data.bin).
+ */
+static const esp_phy_init_data_t phy_init_data = { { 0 } };
 
 /* Load PHY calibration data (from NVS or static buffer) and
  * initialize the WiFi/BT PHY for ESP32-C3.
