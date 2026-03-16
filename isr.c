@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <stdbool.h>
-#include "rom.h"
 
 /* ---- ISR fn/arg storage ---- */
 
@@ -30,38 +29,6 @@ void espradio_call_saved_isr(int32_t n) {
 
 bool espradio_is_from_isr(void) {
     return s_in_isr != 0;
-}
-
-/* ---- Interrupt controller registers (ESP32-C3) ---- */
-
-#define ESPRADIO_INTC_BASE            0x600C2000u
-#define ESPRADIO_INTC_ENABLE_REG      (*(volatile uint32_t *)(ESPRADIO_INTC_BASE + 0x104u))
-#define ESPRADIO_INTC_TYPE_REG        (*(volatile uint32_t *)(ESPRADIO_INTC_BASE + 0x108u))
-#define ESPRADIO_INTC_CLEAR_REG       (*(volatile uint32_t *)(ESPRADIO_INTC_BASE + 0x10Cu))
-#define ESPRADIO_INTC_PRI_REG(n)      (*(volatile uint32_t *)(ESPRADIO_INTC_BASE + 0x114u + (uint32_t)(n) * 4u))
-
-void espradio_set_intr(int32_t cpu_no, uint32_t intr_source, uint32_t intr_num, int32_t intr_prio) {
-    (void)intr_prio;
-    if (cpu_no < 0) {
-        cpu_no = 0;
-    }
-    intr_matrix_set((uint32_t)cpu_no, intr_source, intr_num);
-}
-
-void espradio_clear_intr(uint32_t intr_source, uint32_t intr_num) {
-    (void)intr_num;
-    intr_matrix_set(0, intr_source, 0);
-}
-
-extern void ets_isr_unmask(uint32_t mask);
-extern void ets_isr_mask(uint32_t mask);
-
-void espradio_ints_on(uint32_t mask) {
-    ets_isr_unmask(mask);
-}
-
-void espradio_ints_off(uint32_t mask) {
-    ets_isr_mask(mask);
 }
 
 void espradio_task_yield_from_isr(void) {

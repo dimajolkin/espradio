@@ -7,6 +7,7 @@
 #include "esp_phy_init.h"
 #include "esp_phy.h"
 #include "esp_timer.h"
+#include "phy_init_data_idf.h"
 
 #ifndef ESPRADIO_PHY_STUB_TEST
 #define ESPRADIO_PHY_STUB_TEST 0
@@ -42,6 +43,25 @@ extern void rom_phy_ant_init(void);
 extern void rom_phy_track_pll_cap(void);
 extern esp_err_t esp_deep_sleep_register_phy_hook(void (*hook)(void));
 
+/* Weak stubs for NVS-based PHY calibration and deep sleep hook registration.
+ * These can be overridden by a higher-level application if persistent storage
+ * or custom deep sleep hooks are needed.
+ */
+__attribute__((weak)) esp_err_t esp_phy_load_cal_data_from_nvs(esp_phy_calibration_data_t *out_cal_data) {
+    (void)out_cal_data;
+    return ESP_ERR_NOT_FOUND;
+}
+
+__attribute__((weak)) esp_err_t esp_phy_store_cal_data_to_nvs(const esp_phy_calibration_data_t *cal_data) {
+    (void)cal_data;
+    return ESP_OK;
+}
+
+__attribute__((weak)) esp_err_t esp_deep_sleep_register_phy_hook(void (*hook)(void)) {
+    (void)hook;
+    return ESP_OK;
+}
+
 #define SYSCON_CLK_EN_REG     (*(volatile uint32_t *)0x60026014)
 #define SYSCON_WIFI_RST_EN    (*(volatile uint32_t *)0x60026018)
 #define RTC_CNTL_DIG_PWC      (*(volatile uint32_t *)0x60008088)
@@ -56,6 +76,9 @@ static uint8_t s_wifi_bt_common_ref;
 static uint32_t s_wifi_bt_pd_ref;
 static volatile uint32_t s_wifi_bt_pd_lock;
 
+/* Simple busy-wait delay that does not depend on IDF timers.
+ * Used in early PHY / power-domain bring-up paths.
+ */
 static void esp_rom_delay_us(uint32_t us) {
     for (volatile uint32_t i = 0; i < us * 20; i++) {
         (void)i;
@@ -65,6 +88,7 @@ static void esp_rom_delay_us(uint32_t us) {
 void wifi_bt_common_module_enable(void);
 void wifi_bt_common_module_disable(void);
 
+/* Reference-counted power-up of the WiFi/BT digital power domain. */
 void esp_wifi_bt_power_domain_on(void) {
     PHY_SHIM_DBG("espradio: esp_wifi_bt_power_domain_on\n");
     while (__sync_lock_test_and_set(&s_wifi_bt_pd_lock, 1U)) {}
@@ -82,6 +106,7 @@ void esp_wifi_bt_power_domain_on(void) {
     __sync_lock_release(&s_wifi_bt_pd_lock);
 }
 
+/* Reference-counted power-down of the WiFi/BT digital power domain. */
 void esp_wifi_bt_power_domain_off(void) {
     while (__sync_lock_test_and_set(&s_wifi_bt_pd_lock, 1U)) {}
     if (s_wifi_bt_pd_ref > 0U) {
@@ -94,6 +119,9 @@ void esp_wifi_bt_power_domain_off(void) {
     __sync_lock_release(&s_wifi_bt_pd_lock);
 }
 
+/* Enable shared WiFi/BT clocks; internal refcount keeps them on
+ * while at least one user is active.
+ */
 void wifi_bt_common_module_enable(void) {
     if (s_wifi_bt_common_ref == 0U) {
         SYSCON_CLK_EN_REG |= WIFI_BT_CLK_EN_MASK;
@@ -101,6 +129,7 @@ void wifi_bt_common_module_enable(void) {
     s_wifi_bt_common_ref++;
 }
 
+/* Disable shared WiFi/BT clocks when the last user releases them. */
 void wifi_bt_common_module_disable(void) {
     if (s_wifi_bt_common_ref > 0U) {
         s_wifi_bt_common_ref--;
@@ -140,8 +169,11 @@ static esp_phy_ant_config_t s_phy_ant_config_local = {
     .enabled_ant1 = 1,
 };
 
+/* Load PHY calibration data (from NVS or static buffer) and
+ * initialize the WiFi/BT PHY for ESP32-C3.
+ */
 void esp_phy_load_cal_and_init(void) {
-    const esp_phy_init_data_t *init_data = esp_phy_get_init_data();
+    const esp_phy_init_data_t *init_data = &phy_init_data;
     if (init_data == NULL) {
         printf("espradio: esp_phy_get_init_data returned NULL\n");
         return;
@@ -181,6 +213,7 @@ void esp_phy_load_cal_and_init(void) {
     }
 }
 
+/* Lightweight spinlock guarding PHY shim state across threads/ISRs. */
 static void espradio_phy_lock(void) {
     while (__sync_lock_test_and_set(&s_phy_spin_lock, 1u)) {
     }
@@ -190,10 +223,12 @@ static void espradio_phy_unlock(void) {
     __sync_lock_release(&s_phy_spin_lock);
 }
 
+/* Adapter used by IDF PHY to enable shared clocks via espradio shim. */
 void esp_phy_common_clock_enable(void) {
     wifi_bt_common_module_enable();
 }
 
+/* Adapter used by IDF PHY to disable shared clocks via espradio shim. */
 void esp_phy_common_clock_disable(void) {
     wifi_bt_common_module_disable();
 }
@@ -217,6 +252,7 @@ static void phy_track_pll_timer_callback_local(void *arg) {
     espradio_phy_unlock();
 }
 
+/* Start periodic timer that tracks RF PLL for WiFi modem. */
 void phy_track_pll_init(void) {
     esp_timer_create_args_t args = {
         .callback = phy_track_pll_timer_callback_local,
@@ -231,6 +267,7 @@ void phy_track_pll_init(void) {
     }
 }
 
+/* Stop and delete RF PLL tracking timer. */
 void phy_track_pll_deinit(void) {
     if (s_phy_track_pll_timer != NULL) {
         (void)esp_timer_stop(s_phy_track_pll_timer);
@@ -240,6 +277,7 @@ void phy_track_pll_deinit(void) {
     s_phy_track_pll_started_local = 0u;
 }
 
+/* On-demand PLL tracking when periodic timer is not running. */
 void phy_track_pll(void) {
     if ((s_phy_track_pll_started_local != 0u) && (phy_enabled_modem_contains_local(1u) != 0u)) {
         int64_t now = esp_timer_get_time();
@@ -249,6 +287,7 @@ void phy_track_pll(void) {
     }
 }
 
+/* Restore backed-up digital PHY registers on wakeup. */
 void phy_digital_regs_load(void) {
     if ((s_phy_is_digital_regs_stored_local != 0u) &&
         (s_phy_digital_regs_mem_ptr != NULL)) {
@@ -256,6 +295,7 @@ void phy_digital_regs_load(void) {
     }
 }
 
+/* Backup digital PHY registers before powering down RF. */
 void phy_digital_regs_store(void) {
     if (s_phy_digital_regs_mem_ptr != NULL) {
         (void)phy_dig_reg_backup(true, s_phy_digital_regs_mem_ptr);
@@ -266,18 +306,22 @@ void phy_digital_regs_store(void) {
     }
 }
 
+/* Mark a modem (WiFi/BT) as enabled in local flags. */
 void phy_set_modem_flag(uint32_t modem) {
     s_phy_modem_flags_local = (uint16_t)(s_phy_modem_flags_local | (uint16_t)modem);
 }
 
+/* Clear enabled flag for a modem (WiFi/BT). */
 void phy_clr_modem_flag(uint32_t modem) {
     s_phy_modem_flags_local = (uint16_t)(s_phy_modem_flags_local & (uint16_t)(~(uint16_t)modem));
 }
 
+/* Return current modem enable flags. */
 uint32_t phy_get_modem_flag(void) {
     return (uint32_t)s_phy_modem_flags_local;
 }
 
+/* Prepare per-modem PHY context and allocate backup storage if needed. */
 void esp_phy_modem_init(void) {
     espradio_phy_lock();
     s_phy_modem_init_ref = (uint8_t)(s_phy_modem_init_ref + 1u);
@@ -287,12 +331,14 @@ void esp_phy_modem_init(void) {
     espradio_phy_unlock();
 }
 
+/* Minimal heap_caps_malloc replacement backed by espradio arena. */
 void *heap_caps_malloc(size_t size, uint32_t caps) {
     (void)caps;
     void *espradio_arena_alloc(size_t);
     return espradio_arena_alloc(size);
 }
 
+/* Release modem-specific PHY context and reset digital state. */
 void esp_phy_modem_deinit(void) {
     espradio_phy_lock();
     uint8_t prev_ref = s_phy_modem_init_ref;
@@ -309,10 +355,12 @@ void esp_phy_modem_deinit(void) {
     espradio_phy_unlock();
 }
 
+/* Check whether antenna configuration needs to be pushed to the PHY. */
 bool phy_ant_need_update(void) {
     return s_phy_ant_need_update_local != 0u;
 }
 
+/* Apply current antenna configuration to the RF front-end. */
 void phy_ant_update(void) {
     uint32_t ant0 = (uint32_t)s_phy_ant_config_local.enabled_ant0 & 0x0fu;
     uint32_t ant1 = (uint32_t)s_phy_ant_config_local.enabled_ant1 & 0x0fu;
@@ -343,10 +391,14 @@ void phy_ant_update(void) {
     ant_rx_cfg(rx_auto, rx_ant0, rx_ant1);
 }
 
+/* Mark antenna configuration as up-to-date. */
 void phy_ant_clr_update_flag(void) {
     s_phy_ant_need_update_local = 0u;
 }
 
+/* High-level entry point used by IDF to enable PHY for a modem.
+ * Handles clocks, calibration, PLL tracking and antenna configuration.
+ */
 void esp_phy_enable(uint32_t modem) {
     espradio_phy_lock();
     uint32_t modem_flags = phy_get_modem_flag();
@@ -373,6 +425,9 @@ void esp_phy_enable(uint32_t modem) {
     espradio_phy_unlock();
 }
 
+/* High-level entry point used by IDF to disable PHY for a modem
+ * and power down RF / clocks when the last modem is turned off.
+ */
 void esp_phy_disable(uint32_t modem) {
     espradio_phy_lock();
     phy_clr_modem_flag(modem);

@@ -2,7 +2,6 @@ package espradio
 
 /*
 #include "include.h"
-void espradio_alloc_stats(unsigned *out_alloc, unsigned *out_free);
 */
 import "C"
 
@@ -12,10 +11,6 @@ import "strconv"
 type Error C.esp_err_t
 
 func (e Error) Error() string {
-	u := uint32(e)
-	if u >= 0x3FC00000 && u <= 0x40400000 {
-		return "espradio: unexpected return value 0x" + strconv.FormatUint(uint64(u), 16) + " (looks like pointer, not esp_err_t?)"
-	}
 	switch {
 	case e >= C.ESP_ERR_MEMPROT_BASE:
 		return "espradio: memprot error " + strconv.FormatInt(int64(int32(e)), 10)
@@ -40,13 +35,7 @@ func (e Error) Error() string {
 		case C.ESP_OK:
 			return "espradio: no error" // invalid usage of the Error type
 		case C.ESP_ERR_NO_MEM:
-			var alloc, freed C.uint
-			C.espradio_alloc_stats(&alloc, &freed)
-			msg := "espradio: no memory (alloc=" + strconv.FormatUint(uint64(alloc), 10) + " free=" + strconv.FormatUint(uint64(freed), 10) + ", leak=" + strconv.FormatUint(uint64(alloc)-uint64(freed), 10) + ")"
-			if alloc == freed && alloc <= 4 {
-				msg += "; next alloc may be direct calloc() from blob — use blobs/esp32c3.ld in TinyGo (copy to targets/esp32c3.ld or custom -T script) to increase heap"
-			}
-			return msg
+			return "espradio: no memory"
 		case C.ESP_ERR_INVALID_ARG:
 			return "espradio: invalid argument"
 		default:
@@ -62,9 +51,4 @@ func makeError(errCode C.esp_err_t) error {
 		return Error(errCode)
 	}
 	return nil
-}
-
-func isPointerLike(errCode C.esp_err_t) bool {
-	u := uint32(errCode)
-	return u >= 0x3FC00000 && u <= 0x40400000
 }
