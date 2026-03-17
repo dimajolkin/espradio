@@ -2,7 +2,7 @@
 
 #include "include.h"
 
-/* ===== Go → C (реализованы в корневых .c файлах) ===== */
+/* ===== Go → C (implemented in top-level .c files) ===== */
 void espradio_set_blob_log_level(uint32_t level);
 esp_err_t espradio_wifi_init(void);
 void espradio_wifi_init_completed(void);
@@ -48,7 +48,7 @@ esp_err_t espradio_netif_get_mac(uint8_t mac[6]);
 uint32_t  espradio_netif_rx_cb_count(void);
 uint32_t  espradio_netif_rx_cb_drop(void);
 
-/* ===== C → Go (//export из Go, резолвятся линкером) ===== */
+/* ===== C → Go (//export from Go, resolved by linker) ===== */
 __attribute__((noreturn))
 extern void espradio_panic(char *s);
 extern uint32_t espradio_log_timestamp(void);
@@ -63,7 +63,7 @@ extern void espradio_hal_reset_wifi_mac_go(void);
 extern int espradio_hal_read_mac_go(unsigned char *mac, unsigned int iftype);
 extern void espradio_on_wifi_event(int32_t eventID, void *data);
 
-/* ===== esp32c3/ → линкер (реализованы в esp32c3/\*.c) ===== */
+/* ===== esp32c3/ → linker (implemented in esp32c3/*.c) ===== */
 extern void esp_phy_enable(uint32_t modem);
 extern void esp_phy_disable(uint32_t modem);
 

@@ -372,7 +372,7 @@ void espradio_event_register_default_cb(void) {
 /**************************************************************************
  * Name: esp_event_post (osi _event_post)
  * Queue event and return 0 so driver does not take the error path.
- * Вызывается из wifi task, в т.ч. для HOME_CHANNEL_CHANGE (41/43).
+ * Called from WiFi task, including for HOME_CHANNEL_CHANGE (41/43).
  *************************************************************************/
 esp_err_t esp_event_post(esp_event_base_t event_base, int32_t event_id, const void* event_data, size_t event_data_size, uint32_t ticks_to_wait) {
     (void)ticks_to_wait;
@@ -590,8 +590,8 @@ void espradio_timer_fire(void *ptimer);
  *   ptimer    - Timer handle
  *   pfunction - Callback
  *   parg      - Callback argument
- * Совместимость 1:1 с esp-wifi timer_compat: timer_setfn только регистрирует callback/arg
- * и сбрасывает active-состояние; callback исполняется только через timer_arm/timer_arm_us.
+ * 1:1 compatibility with esp-wifi timer_compat: timer_setfn only registers callback/arg
+ * and clears active state; the callback executes only via timer_arm/timer_arm_us.
  *************************************************************************/
 static void espradio_timer_setfn(void *ptimer, void *pfunction, void *parg) {
 #if ESPRADIO_OSI_DEBUG
@@ -845,8 +845,8 @@ int espradio_timer_poll_due(int max_fire) {
     return fired;
 }
 
-/* Stub: reset WiFi MAC. Блоб вызывает по osi+244 между coex_wifi_request и coex_wifi_release;
- * выставляем g_wdev_last_desc_reset_ptr чтобы следующий за release *ptr=1 не портил память. */
+/* Stub: reset WiFi MAC. Blob calls this at osi+244 between coex_wifi_request and coex_wifi_release;
+ * we set g_wdev_last_desc_reset_ptr so that the *ptr=1 after release does not corrupt memory. */
 static void espradio_wifi_reset_mac(void) {
     espradio_hal_reset_wifi_mac_go();
 #if ESPRADIO_OSI_DEBUG
